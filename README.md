@@ -1,29 +1,49 @@
 # Realtime Internet Speed Runner
-Headless Android app that continuously samples internet download speed and publishes live values in a persistent notification.
-## What It Does
-- No UI screens or launcher activity.
-- Starts `SpeedTestService` from broadcast triggers.
-- Continuously updates current speed in `KB/s` and `MB/s`.
-- Shows live values in the status bar notification.
-## Runtime Components
-- `app/src/main/java/com/Speed/speedtest/receiver/BootReceiver.kt`
-  - Handles `BOOT_COMPLETED`, `LOCKED_BOOT_COMPLETED`, `MY_PACKAGE_REPLACED`, and `PACKAGE_ADDED`.
-  - Starts the foreground service via `ContextCompat.startForegroundService(...)`.
+
+Lightweight Android foreground-service app that shows current download speed as a minimal, always-on notification indicator.
+
+## Behavior
+
+- Uses `TrafficStats.getTotalRxBytes()` every 1 second.
+- Calculates current download speed from received-byte deltas.
+- Applies a 3-sample moving average to reduce jitter.
+- Adapts units to `B/s`, `KB/s`, or `MB/s`.
+- Keeps the notification compact and uncluttered (example: `↓ 120 KB/s`).
+
+## Core Files
+
 - `app/src/main/java/com/Speed/speedtest/service/SpeedTestService.kt`
-  - Foreground service with `dataSync` type.
-  - Samples speed every 5 seconds.
-  - Updates ongoing notification text: `Live: <KB/s> | <MB/s>`.
+  - Foreground service.
+  - Coroutine-based 1-second sampling loop.
+  - Ongoing notification updates with full status-bar unit labels (`120KB/s`, `6MB/s`).
 - `app/src/main/java/com/Speed/speedtest/util/SpeedTester.kt`
-  - Downloads a bounded sample from `https://speed.hetzner.de/1MB.bin`.
-  - Computes live speed from bytes read and elapsed time.
-## Notes About Auto-Run After Install
-Android background-start behavior varies by OS/device policy. This project includes install/update/boot broadcast triggers, but some devices may still defer background execution until the app process is allowed to run by the system.
+  - Device-level Rx-byte sampling.
+  - 3-point moving average and speed text formatting.
+- `app/src/main/java/com/Speed/speedtest/LauncherActivity.kt`
+  - Requests notification permission on Android 13+.
+  - Starts the foreground service and exits immediately (`Theme.NoDisplay`).
+
+## Emulator Notes
+
+- `HWUI`/`EGL` warnings like `Failed to choose config ...` are common emulator graphics messages and are not service crashes.
+
+## Permissions
+
+- `android.permission.INTERNET`
+- `android.permission.FOREGROUND_SERVICE`
+- `android.permission.POST_NOTIFICATIONS` (Android 13+ runtime permission)
+
 ## Build
+
 ```powershell
-cd F:\AndroidStudioProjects
-.\gradlew :app:assembleDebug
+Set-Location "F:\AndroidStudioProjects"
+.\gradlew.bat :app:assembleDebug
 ```
-## Verify Logs
+
+## Run and Verify
+
 ```powershell
-adb logcat -s SpeedTestService SpeedTester BootReceiver
+adb install -r .\app\build\outputs\apk\debug\app-debug.apk
+adb shell am start -n com.Speed.speedtest/.LauncherActivity
+adb logcat -s SpeedTestService
 ```

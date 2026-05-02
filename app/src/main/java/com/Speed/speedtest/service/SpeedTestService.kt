@@ -5,6 +5,7 @@ import android.app.Notification
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.content.res.Configuration
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -55,9 +56,20 @@ class SpeedTestService : Service() {
     private var lastNotificationText: String = ""
     private lateinit var lastIcon: IconCompat
     private val iconValuePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
+        // color set dynamically per-theme when drawing
         textAlign = Paint.Align.CENTER
         textSize = 24f
+    }
+    private val iconUnitPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        // smaller unit text paint
+        textAlign = Paint.Align.CENTER
+        textSize = 14f
+    }
+
+    // returns foreground color matching system light/dark theme
+    private fun getForegroundColor(): Int {
+        val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        return if (night) Color.WHITE else Color.BLACK
     }
 
     override fun onCreate() {
@@ -107,7 +119,7 @@ class SpeedTestService : Service() {
     private fun startForegroundNotification() {
         lastIconLabel = "0|KB/s"
         lastNotificationText = INITIAL_SPEED_TEXT
-        lastIcon = buildStatusIcon("0K")
+        lastIcon = buildStatusIcon("0", "KB/s")
         compactView = buildCompactRemoteViews()
         notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(lastIcon)
@@ -185,12 +197,16 @@ class SpeedTestService : Service() {
     private fun buildCompactRemoteViews(): RemoteViews {
         val view = RemoteViews(packageName, R.layout.notification_speed_compact)
         view.setTextViewText(R.id.text_speed, INITIAL_SPEED_TEXT)
+        // set initial text color to match system theme
+        view.setTextColor(R.id.text_speed, getForegroundColor())
         return view
     }
 
     private fun applyCollapsedViewOnly(text: String) {
         compactView.setTextViewText(R.id.text_speed, text)
+        // update system template fallback text and compact view color
         notificationBuilder.setContentText(text)
+        compactView.setTextColor(R.id.text_speed, getForegroundColor())
         notificationBuilder.setCustomContentView(compactView)
         // Explicitly clear expanded and heads-up custom layouts so only contracted content is defined.
         notificationBuilder.setCustomBigContentView(null)
@@ -200,42 +216,49 @@ class SpeedTestService : Service() {
     private fun getOrCreateStatusIcon(speedText: String): IconCompat {
         val (value, unit) = toIconParts(speedText)
         val fontScaleKey = (resources.configuration.fontScale * 100f).roundToInt()
-        val iconLabel = toStatusIconLabel(value, unit)
-        val iconKey = "$iconLabel|$fontScaleKey"
+        val iconKey = "$value|$unit|$fontScaleKey"
         if (iconKey == lastIconLabel) {
             return lastIcon
         }
 
-        lastIcon = buildStatusIcon(iconLabel)
+        lastIcon = buildStatusIcon(value, unit)
         lastIconLabel = iconKey
         return lastIcon
     }
 
-    private fun buildStatusIcon(iconLabel: String): IconCompat {
+    private fun buildStatusIcon(value: String, unit: String): IconCompat {
         val iconSizePx = (ICON_BASE_DP * resources.displayMetrics.density).roundToInt().coerceAtLeast(ICON_MIN_PX)
         val bitmap = createBitmap(iconSizePx, iconSizePx)
         val canvas = Canvas(bitmap)
         val fontScale = resources.configuration.fontScale.coerceIn(0.85f, 1.35f)
 
-        iconValuePaint.textSize = iconSizePx * 0.74f * fontScale
-        while (iconValuePaint.measureText(iconLabel) > iconSizePx * 0.94f && iconValuePaint.textSize > iconSizePx * 0.34f) {
+        // adapt paint colors to system theme for visibility
+        val fgColor = getForegroundColor()
+        iconValuePaint.color = fgColor
+        iconUnitPaint.color = fgColor
+
+        // Top numeric value - larger
+        iconValuePaint.textSize = iconSizePx * 0.62f * fontScale
+        while (iconValuePaint.measureText(value) > iconSizePx * 0.92f && iconValuePaint.textSize > iconSizePx * 0.28f) {
             iconValuePaint.textSize *= 0.90f
         }
 
-        val center = iconSizePx / 2f
-        val baseline = center - (iconValuePaint.descent() + iconValuePaint.ascent()) / 2f
+        // Bottom unit label - smaller
+        iconUnitPaint.textSize = iconSizePx * 0.26f * fontScale
+        while (iconUnitPaint.measureText(unit) > iconSizePx * 0.92f && iconUnitPaint.textSize > iconSizePx * 0.14f) {
+            iconUnitPaint.textSize *= 0.90f
+        }
 
-        canvas.drawText(iconLabel, center, baseline, iconValuePaint)
+        val center = iconSizePx / 2f
+        val topBaseline = iconSizePx * 0.36f - (iconValuePaint.descent() + iconValuePaint.ascent()) / 2f
+        val bottomBaseline = iconSizePx * 0.76f - (iconUnitPaint.descent() + iconUnitPaint.ascent()) / 2f
+
+        canvas.drawText(value, center, topBaseline, iconValuePaint)
+        canvas.drawText(unit, center, bottomBaseline, iconUnitPaint)
         return IconCompat.createWithBitmap(bitmap)
     }
 
-    private fun toStatusIconLabel(value: String, unit: String): String {
-        val normalized = value.toIntOrNull()?.coerceIn(0, 999) ?: 0
-        return when (unit) {
-            "MB/s" -> "${normalized}M"
-            else -> "${normalized}K"
-        }
-    }
+    // ...existing code...
 
     private fun toIconParts(speedText: String): Pair<String, String> {
         val parts = speedText.trim().split(" ")

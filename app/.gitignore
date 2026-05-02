@@ -1,1 +1,9 @@
 /build
+/release
+/outputs
+/app-debug.apk
+/app-release.apk
+.idea/
+*.iml
+.DS_Store
+local.properties

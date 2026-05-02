@@ -2,17 +2,17 @@ package com.Speed.speedtest.service
 
 import android.Manifest
 import android.app.Notification
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Paint
-import android.content.res.Configuration
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.content.res.Configuration
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.app.NotificationManager
+import android.app.NotificationChannel
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
@@ -20,11 +20,13 @@ import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.drawable.IconCompat
+import com.Speed.speedtest.LauncherActivity
 import com.Speed.speedtest.R
 import com.Speed.speedtest.util.SpeedTester
-import kotlin.math.roundToInt
 import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +36,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 class SpeedTestService : Service() {
     companion object {
@@ -45,6 +48,8 @@ class SpeedTestService : Service() {
         private const val ICON_BASE_DP = 28f
         private const val ICON_MIN_PX = 56
         private const val ACTION_RESTORE_FROM_DISMISS = "com.Speed.speedtest.action.RESTORE_FROM_DISMISS"
+        private const val DYNAMIC_SHORTCUT_ID = "speed_dynamic"
+        private const val LEGACY_SHORTCUT_ID = "speed_shortcut"
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -54,6 +59,8 @@ class SpeedTestService : Service() {
     private lateinit var compactView: RemoteViews
     private var lastIconLabel: String = ""
     private var lastNotificationText: String = ""
+    private var lastShortcutText: String = ""
+    private var shortcutRegistered: Boolean = false
     private lateinit var lastIcon: IconCompat
     private val iconValuePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         // color set dynamically per-theme when drawing
@@ -77,6 +84,7 @@ class SpeedTestService : Service() {
         notificationManager = NotificationManagerCompat.from(this)
         createNotificationChannel()
         startForegroundNotification()
+        ensureDynamicShortcutRegistered()
         Log.d(TAG, "Speed service created")
     }
 
@@ -173,7 +181,9 @@ class SpeedTestService : Service() {
 
             applyCollapsedViewOnly(text)
             val fullSpeedText = text.removePrefix("↓ ").trim()
-            notificationBuilder.setSmallIcon(getOrCreateStatusIcon(fullSpeedText))
+            val speedIcon = getOrCreateStatusIcon(fullSpeedText)
+            notificationBuilder.setSmallIcon(speedIcon)
+            updateLauncherShortcutIcon(fullSpeedText, speedIcon)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
             ) {
@@ -183,6 +193,60 @@ class SpeedTestService : Service() {
             lastNotificationText = text
         } catch (e: Exception) {
             Log.e(TAG, "Error updating notification: ${e.message}", e)
+        }
+    }
+
+    private fun ensureDynamicShortcutRegistered(): Boolean {
+        if (shortcutRegistered) return true
+
+        return try {
+            val launchIntent = Intent(this, LauncherActivity::class.java).apply {
+                action = Intent.ACTION_MAIN
+            }
+            val seedShortcut = ShortcutInfoCompat.Builder(this, DYNAMIC_SHORTCUT_ID)
+                .setShortLabel("0 KB/s")
+                .setLongLabel("Realtime speed 0 KB/s")
+                .setIcon(buildStatusIcon("0", "KB/s"))
+                .setIntent(launchIntent)
+                .build()
+
+            // Remove stale dynamic legacy entry; pinned copies (if any) are updated in updateLauncherShortcutIcon.
+            ShortcutManagerCompat.removeDynamicShortcuts(this, listOf(LEGACY_SHORTCUT_ID))
+            val added = ShortcutManagerCompat.pushDynamicShortcut(this, seedShortcut)
+            shortcutRegistered = added
+            added
+        } catch (e: Exception) {
+            Log.d(TAG, "Dynamic shortcut init skipped: ${e.message}")
+            false
+        }
+    }
+
+    private fun updateLauncherShortcutIcon(speedText: String, icon: IconCompat) {
+        try {
+            if (speedText == lastShortcutText) return
+            if (!ensureDynamicShortcutRegistered()) return
+
+            val launchIntent = Intent(this, LauncherActivity::class.java).apply {
+                action = Intent.ACTION_MAIN
+            }
+            val liveShortcut = ShortcutInfoCompat.Builder(this, DYNAMIC_SHORTCUT_ID)
+                .setShortLabel(speedText)
+                .setLongLabel("Realtime speed $speedText")
+                .setIcon(icon)
+                .setIntent(launchIntent)
+                .build()
+
+            val legacyShortcut = ShortcutInfoCompat.Builder(this, LEGACY_SHORTCUT_ID)
+                .setShortLabel(speedText)
+                .setLongLabel("Realtime speed $speedText")
+                .setIcon(icon)
+                .setIntent(launchIntent)
+                .build()
+
+            ShortcutManagerCompat.updateShortcuts(this, listOf(liveShortcut, legacyShortcut))
+            lastShortcutText = speedText
+        } catch (e: Exception) {
+            Log.d(TAG, "Could not update launcher shortcut: ${e.message}")
         }
     }
 

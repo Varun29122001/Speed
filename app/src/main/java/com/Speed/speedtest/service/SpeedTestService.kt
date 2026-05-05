@@ -15,6 +15,8 @@ import android.app.NotificationManager
 import android.app.NotificationChannel
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
+import android.provider.Settings
 import android.util.Log
 import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
@@ -42,7 +44,7 @@ class SpeedTestService : Service() {
     companion object {
         private const val TAG = "SpeedTestService"
         private const val NOTIFICATION_ID = 1
-        private const val CHANNEL_ID = "speed_test_channel_v3"
+        private const val CHANNEL_ID = "speed_test_channel_v4_top"
         private const val SAMPLE_INTERVAL_MS = 1_000L
         private const val INITIAL_SPEED_TEXT = "↓ 0 KB/s"
         private const val ICON_BASE_DP = 28f
@@ -61,6 +63,7 @@ class SpeedTestService : Service() {
     private var lastNotificationText: String = ""
     private var lastShortcutText: String = ""
     private var shortcutRegistered: Boolean = false
+    private var wakeLock: PowerManager.WakeLock? = null
     private lateinit var lastIcon: IconCompat
     private val iconValuePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         // color set dynamically per-theme when drawing
@@ -81,6 +84,7 @@ class SpeedTestService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        acquireCpuWakeLock()
         notificationManager = NotificationManagerCompat.from(this)
         createNotificationChannel()
         startForegroundNotification()
@@ -106,7 +110,7 @@ class SpeedTestService : Service() {
         val channel = NotificationChannel(
             CHANNEL_ID,
             "Download speed",
-            NotificationManager.IMPORTANCE_DEFAULT
+            NotificationManager.IMPORTANCE_HIGH
         )
         channel.setSound(null, null)
         channel.enableVibration(false)
@@ -133,12 +137,18 @@ class SpeedTestService : Service() {
             .setSmallIcon(lastIcon)
             .setStyle(NotificationCompat.DecoratedCustomViewStyle())
             .setContentText(INITIAL_SPEED_TEXT)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setContentIntent(buildChannelSettingsPendingIntent())
+            .addAction(
+                android.R.drawable.ic_menu_manage,
+                getString(R.string.notification_action_channel_settings),
+                buildChannelSettingsPendingIntent()
+            )
             .setDeleteIntent(buildRestorePendingIntent())
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
 
@@ -258,6 +268,16 @@ class SpeedTestService : Service() {
         return PendingIntent.getService(this, 1002, intent, flags)
     }
 
+    private fun buildChannelSettingsPendingIntent(): PendingIntent {
+        val settingsIntent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
+            putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+            putExtra(Settings.EXTRA_CHANNEL_ID, CHANNEL_ID)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        return PendingIntent.getActivity(this, 1003, settingsIntent, flags)
+    }
+
     private fun buildCompactRemoteViews(): RemoteViews {
         val view = RemoteViews(packageName, R.layout.notification_speed_compact)
         view.setTextViewText(R.id.text_speed, INITIAL_SPEED_TEXT)
@@ -342,6 +362,7 @@ class SpeedTestService : Service() {
         super.onDestroy()
         samplingJob?.cancel()
         serviceScope.cancel()
+        releaseCpuWakeLock()
         requestSelfRestart()
         Log.d(TAG, "Speed service destroyed")
     }
@@ -357,6 +378,33 @@ class SpeedTestService : Service() {
             ContextCompat.startForegroundService(applicationContext, restartIntent)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to request self restart: ${e.message}", e)
+        }
+    }
+
+    private fun acquireCpuWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        try {
+            val powerManager = getSystemService(PowerManager::class.java)
+            val lock = powerManager?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:SpeedCpuLock")
+            lock?.setReferenceCounted(false)
+            lock?.acquire()
+            wakeLock = lock
+            Log.i(TAG, "CPU wake lock acquired")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to acquire wake lock: ${e.message}", e)
+        }
+    }
+
+    private fun releaseCpuWakeLock() {
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                Log.i(TAG, "CPU wake lock released")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to release wake lock cleanly: ${e.message}")
+        } finally {
+            wakeLock = null
         }
     }
 

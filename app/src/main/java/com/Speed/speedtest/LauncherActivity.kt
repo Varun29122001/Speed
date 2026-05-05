@@ -3,8 +3,11 @@ package com.Speed.speedtest
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.Speed.speedtest.service.SpeedTestService
@@ -46,6 +49,8 @@ class LauncherActivity : android.app.Activity() {
             }
         }
 
+        requestIgnoreBatteryOptimizationsBestEffort()
+
         try {
             val serviceIntent = Intent(this, SpeedTestService::class.java)
             ContextCompat.startForegroundService(this, serviceIntent)
@@ -54,6 +59,22 @@ class LauncherActivity : android.app.Activity() {
             Log.e(TAG, "Unable to start service: ${e.message}", e)
         }
         finish()
+    }
+
+    private fun requestIgnoreBatteryOptimizationsBestEffort() {
+        try {
+            val pm = getSystemService(PowerManager::class.java)
+            if (pm?.isIgnoringBatteryOptimizations(packageName) == true) return
+
+            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:$packageName")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            Log.i(TAG, "Requested battery optimization exemption")
+        } catch (e: Exception) {
+            Log.w(TAG, "Unable to open battery optimization exemption screen: ${e.message}")
+        }
     }
 }
 

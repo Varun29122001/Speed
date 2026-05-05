@@ -4,17 +4,29 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Professional gradient background -->
-    <defs>
-        <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" style="stop-color:#1E88E5;stop-opacity:1" />
-            <stop offset="100%" style="stop-color:#0D47A1;stop-opacity:1" />
-        </linearGradient>
-    </defs>
+    <!-- Refined premium blue layered background (keeps original tone but adjusted shapes). -->
+    <!-- Base deep blue -->
     <path
-        android:fillColor="#1E88E5"
-        android:pathData="M0,0h108v54c0,0 0,-27 54,-27c54,0 54,27 54,27v54h-108z" />
+        android:fillColor="#071A33"
+        android:pathData="M0,0h108v108h-108z" />
+
+    <!-- Main mid-blue diagonal band -->
     <path
-        android:fillColor="#0D47A1"
-        android:pathData="M0,54c0,0 0,27 54,27c54,0 54,-27 54,-27v54h-108z" />
+        android:fillColor="#1766C9"
+        android:pathData="M0,18 L108,0 L108,60 L0,78 z" />
+
+    <!-- Lighter upper field to add depth -->
+    <path
+        android:fillColor="#4FA9F0"
+        android:pathData="M0,0 L108,0 L72,32 L0,38 z" />
+
+    <!-- Subtle gloss / highlight shape -->
+    <path
+        android:fillColor="#12FFFFFF"
+        android:pathData="M8,12 L100,12 L64,40 L8,44 z" />
+
+    <!-- Lower slope (kept blue to avoid a near-black bottom bar in launcher previews) -->
+    <path
+        android:fillColor="#0C2F56"
+        android:pathData="M0,70 L108,44 L108,108 L0,108 z" />
 </vector>

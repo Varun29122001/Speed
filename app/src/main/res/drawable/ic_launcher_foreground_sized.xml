@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Single foreground source with built-in sizing for adaptive launcher icons -->
 <inset xmlns:android="http://schemas.android.com/apk/res/android"
-    android:insetLeft="20dp"
-    android:insetTop="20dp"
-    android:insetRight="20dp"
-    android:insetBottom="20dp">
+    android:insetLeft="14dp"
+    android:insetTop="14dp"
+    android:insetRight="14dp"
+    android:insetBottom="14dp">
     <bitmap
         android:src="@drawable/direct_download"
         android:gravity="center"
         android:antialias="true" />
 </inset>
+
+

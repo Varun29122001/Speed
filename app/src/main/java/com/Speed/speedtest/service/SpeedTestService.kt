@@ -111,7 +111,7 @@ class SpeedTestService : Service() {
         val channel = NotificationChannel(
             CHANNEL_ID,
             "Download speed",
-            NotificationManager.IMPORTANCE_MAX
+            NotificationManager.IMPORTANCE_HIGH
         )
         channel.setSound(null, null)
         channel.enableVibration(false)

@@ -84,12 +84,13 @@ class SpeedTestService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        Log.i(TAG, "SpeedTestService.onCreate() called - initializing service")
         acquireCpuWakeLock()
         notificationManager = NotificationManagerCompat.from(this)
         createNotificationChannel()
         startForegroundNotification()
         ensureDynamicShortcutRegistered()
-        Log.d(TAG, "Speed service created")
+        Log.d(TAG, "Speed service created and foreground notification started")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -110,13 +111,17 @@ class SpeedTestService : Service() {
         val channel = NotificationChannel(
             CHANNEL_ID,
             "Download speed",
-            NotificationManager.IMPORTANCE_HIGH
+            NotificationManager.IMPORTANCE_MAX
         )
         channel.setSound(null, null)
         channel.enableVibration(false)
         channel.enableLights(false)
         channel.setShowBadge(false)
         channel.lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        // Ensure sticky: disable importance reduction
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            channel.setAllowBubbles(false)
+        }
 
         val manager = getSystemService(NotificationManager::class.java)
         manager?.createNotificationChannel(channel)
@@ -137,7 +142,7 @@ class SpeedTestService : Service() {
             .setSmallIcon(lastIcon)
             .setStyle(NotificationCompat.DecoratedCustomViewStyle())
             .setContentText(INITIAL_SPEED_TEXT)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
@@ -151,15 +156,25 @@ class SpeedTestService : Service() {
             )
             .setDeleteIntent(buildRestorePendingIntent())
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .setAutoCancel(false)
+            .setSilent(true)
 
         applyCollapsedViewOnly(INITIAL_SPEED_TEXT)
 
         try {
+            // Check permission before starting foreground
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                    Log.w(TAG, "POST_NOTIFICATIONS permission not granted - notification may not display")
+                }
+            }
+            
             startForeground(
                 NOTIFICATION_ID,
                 notificationBuilder.build(),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
             )
+            Log.i(TAG, "Foreground notification started successfully")
         } catch (e: Exception) {
             Log.e(TAG, "Error starting foreground service: ${e.message}", e)
         }
@@ -194,13 +209,22 @@ class SpeedTestService : Service() {
             val speedIcon = getOrCreateStatusIcon(fullSpeedText)
             notificationBuilder.setSmallIcon(speedIcon)
             updateLauncherShortcutIcon(fullSpeedText, speedIcon)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-            ) {
-                return
+
+            // Check permission on Android 13+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                    Log.w(TAG, "POST_NOTIFICATIONS permission not granted; unable to post notification")
+                    return
+                }
             }
-            notificationManager.notify(NOTIFICATION_ID, notificationBuilder.build())
-            lastNotificationText = text
+
+            try {
+                notificationManager.notify(NOTIFICATION_ID, notificationBuilder.build())
+                Log.d(TAG, "Notification updated: $text")
+                lastNotificationText = text
+            } catch (e: SecurityException) {
+                Log.e(TAG, "SecurityException posting notification: ${e.message}", e)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error updating notification: ${e.message}", e)
         }
@@ -354,6 +378,7 @@ class SpeedTestService : Service() {
         return when (unit) {
             "MB/s" -> String.format(Locale.US, "%d", value.roundToInt().coerceIn(0, 999)) to "MB/s"
             "KB/s" -> String.format(Locale.US, "%d", value.roundToInt().coerceIn(0, 999)) to "KB/s"
+            "B/s" -> String.format(Locale.US, "%d", value.roundToInt().coerceIn(0, 999)) to "B/s"
             else -> "0" to "KB/s"
         }
     }

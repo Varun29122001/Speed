@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Removed monochrome MB/s vector; use the direct_download bitmap instead -->
-<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
-    android:src="@drawable/direct_download"
-    android:gravity="center"
-    android:antialias="true" />
-
-
-

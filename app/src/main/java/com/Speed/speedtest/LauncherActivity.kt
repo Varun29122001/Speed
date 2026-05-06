@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.Speed.speedtest.service.SpeedTestService
 
@@ -18,9 +19,11 @@ import com.Speed.speedtest.service.SpeedTestService
 class LauncherActivity : android.app.Activity() {
     companion object {
         private const val TAG = "LauncherActivity"
+        private const val NOTIFICATION_PERMISSION_CODE = 42
     }
 
     private var launched = false
+    private var shouldFinishAfterPermission = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -35,6 +38,13 @@ class LauncherActivity : android.app.Activity() {
         }
     }
 
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == NOTIFICATION_PERMISSION_CODE) {
+            startServiceAndFinish()
+        }
+    }
+
     private fun bootstrapAndFinish() {
         if (launched) {
             if (!isFinishing) finish()
@@ -42,19 +52,31 @@ class LauncherActivity : android.app.Activity() {
         }
         launched = true
 
+        // Request POST_NOTIFICATIONS permission on Android 13+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val granted = checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-            if (!granted) {
-                Log.i(TAG, "POST_NOTIFICATIONS not granted; starting service without prompting from NoDisplay activity")
+            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                Log.i(TAG, "Requesting POST_NOTIFICATIONS permission")
+                // Request the permission (this will trigger onRequestPermissionsResult)
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                    NOTIFICATION_PERMISSION_CODE
+                )
+                shouldFinishAfterPermission = true
+                return
             }
         }
 
+        startServiceAndFinish()
+    }
+
+    private fun startServiceAndFinish() {
         requestIgnoreBatteryOptimizationsBestEffort()
 
         try {
             val serviceIntent = Intent(this, SpeedTestService::class.java)
             ContextCompat.startForegroundService(this, serviceIntent)
-            Log.i(TAG, "SpeedTestService start requested")
+            Log.i(TAG, "SpeedTestService start requested successfully")
         } catch (e: Exception) {
             Log.e(TAG, "Unable to start service: ${e.message}", e)
         }

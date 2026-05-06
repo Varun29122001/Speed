@@ -4,5 +4,4 @@
     <background android:drawable="@drawable/ic_launcher_background" />
     <!-- Foreground drawable now includes its own inset sizing -->
     <foreground android:drawable="@drawable/ic_launcher_foreground" />
-    <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
 </adaptive-icon>

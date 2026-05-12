@@ -21,7 +21,6 @@ import android.util.Log
 import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import androidx.core.content.ContextCompat
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.createBitmap
@@ -44,7 +43,7 @@ class SpeedTestService : Service() {
     companion object {
         private const val TAG = "SpeedTestService"
         private const val NOTIFICATION_ID = 1
-        private const val CHANNEL_ID = "speed_test_channel_v4_top"
+        private const val CHANNEL_ID = "speed_test_channel_v5_top"
         private const val SAMPLE_INTERVAL_MS = 1_000L
         private const val INITIAL_SPEED_TEXT = "↓ 0 KB/s"
         private const val ICON_BASE_DP = 28f
@@ -142,7 +141,7 @@ class SpeedTestService : Service() {
             .setSmallIcon(lastIcon)
             .setStyle(NotificationCompat.DecoratedCustomViewStyle())
             .setContentText(INITIAL_SPEED_TEXT)
-            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
@@ -191,6 +190,7 @@ class SpeedTestService : Service() {
 
     private fun performSpeedSample() {
         try {
+            acquireCpuWakeLock()
             val result = SpeedTester.sampleRealtimeSpeed()
             val speedText = if (result == null) "0 KB/s" else result.displayText
             updateNotification("↓ $speedText")
@@ -388,22 +388,12 @@ class SpeedTestService : Service() {
         samplingJob?.cancel()
         serviceScope.cancel()
         releaseCpuWakeLock()
-        requestSelfRestart()
         Log.d(TAG, "Speed service destroyed")
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        requestSelfRestart()
-    }
-
-    private fun requestSelfRestart() {
-        try {
-            val restartIntent = Intent(applicationContext, SpeedTestService::class.java)
-            ContextCompat.startForegroundService(applicationContext, restartIntent)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to request self restart: ${e.message}", e)
-        }
+        Log.d(TAG, "Task removed; service will continue as foreground due to stopWithTask=false")
     }
 
     private fun acquireCpuWakeLock() {
@@ -412,7 +402,7 @@ class SpeedTestService : Service() {
             val powerManager = getSystemService(PowerManager::class.java)
             val lock = powerManager?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:SpeedCpuLock")
             lock?.setReferenceCounted(false)
-            lock?.acquire()
+            lock?.acquire(60 * 60 * 1000L)
             wakeLock = lock
             Log.i(TAG, "CPU wake lock acquired")
         } catch (e: Exception) {

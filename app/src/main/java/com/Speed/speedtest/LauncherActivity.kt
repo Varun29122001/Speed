@@ -32,8 +32,8 @@ class LauncherActivity : android.app.Activity() {
 
     override fun onResume() {
         super.onResume()
-        // Theme.NoDisplay activities must finish before onResume completes.
-        if (!isFinishing) {
+        // Only auto-finish if we are NOT waiting for the permission dialog result.
+        if (!shouldFinishAfterPermission && !isFinishing) {
             finish()
         }
     }
@@ -41,6 +41,7 @@ class LauncherActivity : android.app.Activity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == NOTIFICATION_PERMISSION_CODE) {
+            shouldFinishAfterPermission = false
             startServiceAndFinish()
         }
     }

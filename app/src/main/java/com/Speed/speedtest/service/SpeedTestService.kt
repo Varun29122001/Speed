@@ -1,5 +1,6 @@
 package com.Speed.speedtest.service
 
+import android.annotation.SuppressLint
 import android.Manifest
 import android.app.Notification
 import android.app.PendingIntent
@@ -64,6 +65,7 @@ class SpeedTestService : Service() {
     private var shortcutRegistered: Boolean = false
     private var wakeLock: PowerManager.WakeLock? = null
     private lateinit var lastIcon: IconCompat
+    private var lastBitmap: android.graphics.Bitmap? = null
     private val iconValuePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         // color set dynamically per-theme when drawing
         textAlign = Paint.Align.CENTER
@@ -84,7 +86,7 @@ class SpeedTestService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "SpeedTestService.onCreate() called - initializing service")
-        acquireCpuWakeLock()
+        acquireCpuWakeLock() // acquired once; released in onDestroy
         notificationManager = NotificationManagerCompat.from(this)
         createNotificationChannel()
         startForegroundNotification()
@@ -141,10 +143,12 @@ class SpeedTestService : Service() {
             .setSmallIcon(lastIcon)
             .setStyle(NotificationCompat.DecoratedCustomViewStyle())
             .setContentText(INITIAL_SPEED_TEXT)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+            .setWhen(Long.MAX_VALUE)
             .setShowWhen(false)
+            .setSortKey("0000")
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setContentIntent(buildChannelSettingsPendingIntent())
@@ -190,7 +194,6 @@ class SpeedTestService : Service() {
 
     private fun performSpeedSample() {
         try {
-            acquireCpuWakeLock()
             val result = SpeedTester.sampleRealtimeSpeed()
             val speedText = if (result == null) "0 KB/s" else result.displayText
             updateNotification("↓ $speedText")
@@ -305,16 +308,17 @@ class SpeedTestService : Service() {
     private fun buildCompactRemoteViews(): RemoteViews {
         val view = RemoteViews(packageName, R.layout.notification_speed_compact)
         view.setTextViewText(R.id.text_speed, INITIAL_SPEED_TEXT)
-        // set initial text color to match system theme
         view.setTextColor(R.id.text_speed, getForegroundColor())
         return view
     }
 
     private fun applyCollapsedViewOnly(text: String) {
         compactView.setTextViewText(R.id.text_speed, text)
-        // update system template fallback text and compact view color
+        // update system template fallback text and compact view colors
+        val fgColor = getForegroundColor()
         notificationBuilder.setContentText(text)
-        compactView.setTextColor(R.id.text_speed, getForegroundColor())
+        compactView.setTextColor(R.id.text_speed, fgColor)
+        compactView.setInt(R.id.icon_status, "setColorFilter", fgColor)
         notificationBuilder.setCustomContentView(compactView)
         // Explicitly clear expanded and heads-up custom layouts so only contracted content is defined.
         notificationBuilder.setCustomBigContentView(null)
@@ -335,8 +339,10 @@ class SpeedTestService : Service() {
     }
 
     private fun buildStatusIcon(value: String, unit: String): IconCompat {
+        lastBitmap?.recycle()
         val iconSizePx = (ICON_BASE_DP * resources.displayMetrics.density).roundToInt().coerceAtLeast(ICON_MIN_PX)
         val bitmap = createBitmap(iconSizePx, iconSizePx)
+        lastBitmap = bitmap
         val canvas = Canvas(bitmap)
         val fontScale = resources.configuration.fontScale.coerceIn(0.85f, 1.35f)
 
@@ -366,7 +372,7 @@ class SpeedTestService : Service() {
         return IconCompat.createWithBitmap(bitmap)
     }
 
-    // ...existing code...
+
 
     private fun toIconParts(speedText: String): Pair<String, String> {
         val parts = speedText.trim().split(" ")
@@ -388,6 +394,8 @@ class SpeedTestService : Service() {
         samplingJob?.cancel()
         serviceScope.cancel()
         releaseCpuWakeLock()
+        lastBitmap?.recycle()
+        lastBitmap = null
         Log.d(TAG, "Speed service destroyed")
     }
 
@@ -396,13 +404,14 @@ class SpeedTestService : Service() {
         Log.d(TAG, "Task removed; service will continue as foreground due to stopWithTask=false")
     }
 
+    @SuppressLint("WakelockTimeout")
     private fun acquireCpuWakeLock() {
         if (wakeLock?.isHeld == true) return
         try {
             val powerManager = getSystemService(PowerManager::class.java)
             val lock = powerManager?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:SpeedCpuLock")
             lock?.setReferenceCounted(false)
-            lock?.acquire(60 * 60 * 1000L)
+            lock?.acquire() // no timeout — lifecycle managed in onDestroy
             wakeLock = lock
             Log.i(TAG, "CPU wake lock acquired")
         } catch (e: Exception) {

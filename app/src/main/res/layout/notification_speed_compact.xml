@@ -10,7 +10,7 @@
     android:paddingEnd="8dp"
     android:paddingBottom="6dp">
 
-    <!-- Download speed indicator -->
+    <!-- Primary download speed icon (kept as requested) -->
     <ImageView
         android:id="@+id/icon_status"
         android:layout_width="20dp"

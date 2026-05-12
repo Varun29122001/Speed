@@ -47,7 +47,7 @@ class SpeedTestService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "speed_test_channel_v5_top"
         private const val SAMPLE_INTERVAL_MS = 1_000L
-        private const val INITIAL_SPEED_TEXT = "↓ 0 KB/s"
+        private const val INITIAL_SPEED_TEXT = "0 KB/s"
         private const val ICON_BASE_DP = 28f
         private const val ICON_MIN_PX = 56
         private const val ACTION_RESTORE_FROM_DISMISS = "com.Speed.speedtest.action.RESTORE_FROM_DISMISS"
@@ -203,13 +203,13 @@ class SpeedTestService : Service() {
             // Get today's Wi-Fi / Mobile data usage from system stats
             val usage = DataUsageTracker.getTodayUsage(this)
             updateNotification(
-                "↓ $speedText",
+                speedText,
                 usage?.wifiDisplayText ?: "",
                 usage?.mobileDisplayText ?: ""
             )
         } catch (e: Exception) {
             Log.e(TAG, "Error during speed sampling: ${e.message}", e)
-            updateNotification("↓ 0 KB/s", "", "")
+            updateNotification("0 KB/s", "", "")
         }
     }
 
@@ -218,7 +218,7 @@ class SpeedTestService : Service() {
             if (text == lastNotificationText && wifiText == lastWifiText && mobileText == lastMobileText) return
 
             applyCollapsedViewOnly(text, wifiText, mobileText)
-            val fullSpeedText = text.removePrefix("↓ ").trim()
+            val fullSpeedText = text.trim()
             val speedIcon = getOrCreateStatusIcon(fullSpeedText)
             notificationBuilder.setSmallIcon(speedIcon)
             updateLauncherShortcutIcon(fullSpeedText, speedIcon)

@@ -29,6 +29,7 @@ import androidx.core.graphics.drawable.IconCompat
 import com.Speed.speedtest.LauncherActivity
 import com.Speed.speedtest.R
 import com.Speed.speedtest.util.SpeedTester
+import com.Speed.speedtest.util.DataUsageTracker
 import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -61,6 +62,8 @@ class SpeedTestService : Service() {
     private lateinit var compactView: RemoteViews
     private var lastIconLabel: String = ""
     private var lastNotificationText: String = ""
+    private var lastWifiText: String = ""
+    private var lastMobileText: String = ""
     private var lastShortcutText: String = ""
     private var shortcutRegistered: Boolean = false
     private var wakeLock: PowerManager.WakeLock? = null
@@ -162,7 +165,7 @@ class SpeedTestService : Service() {
             .setAutoCancel(false)
             .setSilent(true)
 
-        applyCollapsedViewOnly(INITIAL_SPEED_TEXT)
+        applyCollapsedViewOnly(INITIAL_SPEED_TEXT, "", "")
 
         try {
             // Check permission before starting foreground
@@ -196,18 +199,25 @@ class SpeedTestService : Service() {
         try {
             val result = SpeedTester.sampleRealtimeSpeed()
             val speedText = if (result == null) "0 KB/s" else result.displayText
-            updateNotification("↓ $speedText")
+
+            // Get today's Wi-Fi / Mobile data usage from system stats
+            val usage = DataUsageTracker.getTodayUsage(this)
+            updateNotification(
+                "↓ $speedText",
+                usage?.wifiDisplayText ?: "",
+                usage?.mobileDisplayText ?: ""
+            )
         } catch (e: Exception) {
             Log.e(TAG, "Error during speed sampling: ${e.message}", e)
-            updateNotification("↓ 0 KB/s")
+            updateNotification("↓ 0 KB/s", "", "")
         }
     }
 
-    private fun updateNotification(text: String) {
+    private fun updateNotification(text: String, wifiText: String, mobileText: String) {
         try {
-            if (text == lastNotificationText) return
+            if (text == lastNotificationText && wifiText == lastWifiText && mobileText == lastMobileText) return
 
-            applyCollapsedViewOnly(text)
+            applyCollapsedViewOnly(text, wifiText, mobileText)
             val fullSpeedText = text.removePrefix("↓ ").trim()
             val speedIcon = getOrCreateStatusIcon(fullSpeedText)
             notificationBuilder.setSmallIcon(speedIcon)
@@ -225,6 +235,8 @@ class SpeedTestService : Service() {
                 notificationManager.notify(NOTIFICATION_ID, notificationBuilder.build())
                 Log.d(TAG, "Notification updated: $text")
                 lastNotificationText = text
+                lastWifiText = wifiText
+                lastMobileText = mobileText
             } catch (e: SecurityException) {
                 Log.e(TAG, "SecurityException posting notification: ${e.message}", e)
             }
@@ -307,18 +319,48 @@ class SpeedTestService : Service() {
 
     private fun buildCompactRemoteViews(): RemoteViews {
         val view = RemoteViews(packageName, R.layout.notification_speed_compact)
+        val fgColor = getForegroundColor()
+        // Speed text
         view.setTextViewText(R.id.text_speed, INITIAL_SPEED_TEXT)
-        view.setTextColor(R.id.text_speed, getForegroundColor())
+        view.setTextColor(R.id.text_speed, fgColor)
+        // WiFi usage
+        view.setTextViewText(R.id.text_wifi_usage, "")
+        view.setTextColor(R.id.text_wifi_usage, fgColor)
+        // Mobile usage
+        view.setTextViewText(R.id.text_mobile_usage, "")
+        view.setTextColor(R.id.text_mobile_usage, fgColor)
+        // Separator
+        view.setTextColor(R.id.text_separator, fgColor)
+        // Icon tints
+        view.setInt(R.id.icon_status, "setColorFilter", fgColor)
+        view.setInt(R.id.icon_wifi, "setColorFilter", fgColor)
+        view.setInt(R.id.icon_mobile, "setColorFilter", fgColor)
         return view
     }
 
-    private fun applyCollapsedViewOnly(text: String) {
-        compactView.setTextViewText(R.id.text_speed, text)
-        // update system template fallback text and compact view colors
+    private fun applyCollapsedViewOnly(text: String, wifiText: String, mobileText: String) {
         val fgColor = getForegroundColor()
-        notificationBuilder.setContentText(text)
+        // Speed
+        compactView.setTextViewText(R.id.text_speed, text)
         compactView.setTextColor(R.id.text_speed, fgColor)
+        // WiFi data usage
+        compactView.setTextViewText(R.id.text_wifi_usage, wifiText)
+        compactView.setTextColor(R.id.text_wifi_usage, fgColor)
+        // Mobile data usage
+        compactView.setTextViewText(R.id.text_mobile_usage, mobileText)
+        compactView.setTextColor(R.id.text_mobile_usage, fgColor)
+        // Separator & icon tints for dark mode
+        compactView.setTextColor(R.id.text_separator, fgColor)
         compactView.setInt(R.id.icon_status, "setColorFilter", fgColor)
+        compactView.setInt(R.id.icon_wifi, "setColorFilter", fgColor)
+        compactView.setInt(R.id.icon_mobile, "setColorFilter", fgColor)
+        // System template fallback text
+        val fallback = buildString {
+            append(text)
+            if (wifiText.isNotEmpty()) append("  W: $wifiText")
+            if (mobileText.isNotEmpty()) append("  M: $mobileText")
+        }
+        notificationBuilder.setContentText(fallback)
         notificationBuilder.setCustomContentView(compactView)
         // Explicitly clear expanded and heads-up custom layouts so only contracted content is defined.
         notificationBuilder.setCustomBigContentView(null)

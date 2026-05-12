@@ -10,6 +10,7 @@
     android:paddingEnd="8dp"
     android:paddingBottom="6dp">
 
+    <!-- Download speed indicator -->
     <ImageView
         android:id="@+id/icon_status"
         android:layout_width="20dp"
@@ -20,12 +21,61 @@
 
     <TextView
         android:id="@+id/text_speed"
-        android:layout_width="wrap_content"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
+        android:layout_weight="1"
         android:layout_marginStart="8dp"
         android:text="@string/notification_speed_default"
         android:textColor="#1A1C1E"
-        android:textSize="14sp"
+        android:textSize="15sp"
+        android:textStyle="bold" />
+
+    <!-- Wi-Fi data usage -->
+    <ImageView
+        android:id="@+id/icon_wifi"
+        android:layout_width="15dp"
+        android:layout_height="15dp"
+        android:src="@drawable/ic_wifi"
+        android:tint="#1A1C1E"
+        android:contentDescription="@null" />
+
+    <TextView
+        android:id="@+id/text_wifi_usage"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="3dp"
+        android:textColor="#1A1C1E"
+        android:textSize="15sp"
+        android:textStyle="bold" />
+
+    <!-- Separator -->
+    <TextView
+        android:id="@+id/text_separator"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="6dp"
+        android:layout_marginEnd="6dp"
+        android:text="|"
+        android:textColor="#1A1C1E"
+        android:textSize="15sp"
+        android:alpha="0.4" />
+
+    <!-- Mobile data usage -->
+    <ImageView
+        android:id="@+id/icon_mobile"
+        android:layout_width="15dp"
+        android:layout_height="15dp"
+        android:src="@drawable/ic_mobile_data"
+        android:tint="#1A1C1E"
+        android:contentDescription="@null" />
+
+    <TextView
+        android:id="@+id/text_mobile_usage"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="3dp"
+        android:textColor="#1A1C1E"
+        android:textSize="15sp"
         android:textStyle="bold" />
 
 </LinearLayout>

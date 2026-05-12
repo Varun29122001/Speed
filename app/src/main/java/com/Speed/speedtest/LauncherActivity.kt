@@ -12,6 +12,7 @@ import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.Speed.speedtest.service.SpeedTestService
+import com.Speed.speedtest.util.DataUsageTracker
 
 /**
  * Minimal bootstrap activity: starts the foreground speed service and exits immediately.
@@ -73,6 +74,7 @@ class LauncherActivity : android.app.Activity() {
 
     private fun startServiceAndFinish() {
         requestIgnoreBatteryOptimizationsBestEffort()
+        requestUsageAccessBestEffort()
 
         try {
             val serviceIntent = Intent(this, SpeedTestService::class.java)
@@ -97,6 +99,20 @@ class LauncherActivity : android.app.Activity() {
             Log.i(TAG, "Requested battery optimization exemption")
         } catch (e: Exception) {
             Log.w(TAG, "Unable to open battery optimization exemption screen: ${e.message}")
+        }
+    }
+
+    private fun requestUsageAccessBestEffort() {
+        try {
+            if (DataUsageTracker.hasUsageAccess(this)) return
+
+            val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            Log.i(TAG, "Requested usage access permission")
+        } catch (e: Exception) {
+            Log.w(TAG, "Unable to open usage access settings: ${e.message}")
         }
     }
 }

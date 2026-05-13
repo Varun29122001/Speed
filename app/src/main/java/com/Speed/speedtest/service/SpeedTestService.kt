@@ -12,6 +12,8 @@ import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Rect
+import android.graphics.Typeface
 import android.app.NotificationManager
 import android.app.NotificationChannel
 import android.os.Build
@@ -48,8 +50,8 @@ class SpeedTestService : Service() {
         private const val CHANNEL_ID = "speed_test_channel_v5_top"
         private const val SAMPLE_INTERVAL_MS = 1_000L
         private const val INITIAL_SPEED_TEXT = "0 KB/s"
-        private const val ICON_BASE_DP = 28f
-        private const val ICON_MIN_PX = 56
+        private const val ICON_BASE_DP = 48f
+        private const val ICON_MIN_PX = 96
         private const val ACTION_RESTORE_FROM_DISMISS = "com.Speed.speedtest.action.RESTORE_FROM_DISMISS"
         private const val DYNAMIC_SHORTCUT_ID = "speed_dynamic"
         private const val LEGACY_SHORTCUT_ID = "speed_shortcut"
@@ -70,15 +72,14 @@ class SpeedTestService : Service() {
     private lateinit var lastIcon: IconCompat
     private var lastBitmap: android.graphics.Bitmap? = null
     private val iconValuePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        // color set dynamically per-theme when drawing
         textAlign = Paint.Align.CENTER
-        textSize = 24f
+        typeface = Typeface.DEFAULT_BOLD
     }
     private val iconUnitPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        // smaller unit text paint
         textAlign = Paint.Align.CENTER
-        textSize = 14f
+        typeface = Typeface.DEFAULT_BOLD
     }
+    private val textBoundsRect = Rect()
 
     // returns foreground color matching system light/dark theme
     private fun getForegroundColor(): Int {
@@ -386,31 +387,62 @@ class SpeedTestService : Service() {
         val bitmap = createBitmap(iconSizePx, iconSizePx)
         lastBitmap = bitmap
         val canvas = Canvas(bitmap)
-        val fontScale = resources.configuration.fontScale.coerceIn(0.85f, 1.35f)
 
-        // adapt paint colors to system theme for visibility
         val fgColor = getForegroundColor()
         iconValuePaint.color = fgColor
         iconUnitPaint.color = fgColor
 
-        // Top numeric value - larger
-        iconValuePaint.textSize = iconSizePx * 0.62f * fontScale
-        while (iconValuePaint.measureText(value) > iconSizePx * 0.92f && iconValuePaint.textSize > iconSizePx * 0.28f) {
-            iconValuePaint.textSize *= 0.90f
+        val sz = iconSizePx.toFloat()
+        // Value text gets ~63% of height, unit gets ~33%, gap ~4%
+        val valueZoneH = sz * 0.63f
+        val unitZoneH = sz * 0.33f
+        val gap = sz * 0.04f
+
+        // === Value text: scale to fill its zone completely ===
+        iconValuePaint.textSize = valueZoneH  // start at zone height
+        iconValuePaint.getTextBounds(value, 0, value.length, textBoundsRect)
+        // Scale down if wider than icon
+        val valueTextW = iconValuePaint.measureText(value)
+        if (valueTextW > sz) {
+            iconValuePaint.textSize *= (sz / valueTextW)
+            iconValuePaint.getTextBounds(value, 0, value.length, textBoundsRect)
         }
-
-        // Bottom unit label - smaller
-        iconUnitPaint.textSize = iconSizePx * 0.26f * fontScale
-        while (iconUnitPaint.measureText(unit) > iconSizePx * 0.92f && iconUnitPaint.textSize > iconSizePx * 0.14f) {
-            iconUnitPaint.textSize *= 0.90f
+        // Scale up/down to exactly fill the value zone height
+        val valueBoundsH = textBoundsRect.height().toFloat()
+        if (valueBoundsH > 0) {
+            val hScale = valueZoneH / valueBoundsH
+            val wAfterScale = iconValuePaint.measureText(value) * hScale
+            // Apply height scaling only if it won't overflow width
+            val finalScale = if (wAfterScale > sz) (sz / iconValuePaint.measureText(value)) else hScale
+            iconValuePaint.textSize *= finalScale
+            iconValuePaint.getTextBounds(value, 0, value.length, textBoundsRect)
         }
+        // Draw value: vertically centered in top zone (y=0 to valueZoneH)
+        val valueBaseline = (valueZoneH / 2f) - (textBoundsRect.exactCenterY())
 
-        val center = iconSizePx / 2f
-        val topBaseline = iconSizePx * 0.36f - (iconValuePaint.descent() + iconValuePaint.ascent()) / 2f
-        val bottomBaseline = iconSizePx * 0.76f - (iconUnitPaint.descent() + iconUnitPaint.ascent()) / 2f
+        // === Unit text: scale to fill its zone completely ===
+        iconUnitPaint.textSize = unitZoneH
+        iconUnitPaint.getTextBounds(unit, 0, unit.length, textBoundsRect)
+        val unitTextW = iconUnitPaint.measureText(unit)
+        if (unitTextW > sz) {
+            iconUnitPaint.textSize *= (sz / unitTextW)
+            iconUnitPaint.getTextBounds(unit, 0, unit.length, textBoundsRect)
+        }
+        val unitBoundsH = textBoundsRect.height().toFloat()
+        if (unitBoundsH > 0) {
+            val hScale = unitZoneH / unitBoundsH
+            val wAfterScale = iconUnitPaint.measureText(unit) * hScale
+            val finalScale = if (wAfterScale > sz) (sz / iconUnitPaint.measureText(unit)) else hScale
+            iconUnitPaint.textSize *= finalScale
+            iconUnitPaint.getTextBounds(unit, 0, unit.length, textBoundsRect)
+        }
+        // Draw unit: vertically centered in bottom zone (y = valueZoneH+gap to sz)
+        val unitTop = valueZoneH + gap
+        val unitBaseline = unitTop + (unitZoneH / 2f) - (textBoundsRect.exactCenterY())
 
-        canvas.drawText(value, center, topBaseline, iconValuePaint)
-        canvas.drawText(unit, center, bottomBaseline, iconUnitPaint)
+        val cx = sz / 2f
+        canvas.drawText(value, cx, valueBaseline, iconValuePaint)
+        canvas.drawText(unit, cx, unitBaseline, iconUnitPaint)
         return IconCompat.createWithBitmap(bitmap)
     }
 

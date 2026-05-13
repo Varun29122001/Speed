@@ -77,6 +77,7 @@ class SpeedTestService : Service() {
     }
     private val iconUnitPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG or Paint.LINEAR_TEXT_FLAG).apply {
         textAlign = Paint.Align.CENTER
+        textScaleX = 0.85f // Squeeze horizontally so it can grow much taller without hitting width limits
         hinting = Paint.HINTING_ON
     }
     private val valueBounds = Rect()
@@ -411,8 +412,8 @@ class SpeedTestService : Service() {
         val sz = iconSizePx.toFloat()
         val gap = sz * 0.03f  // tiny gap between value and unit
 
-        // --- Step 1: Size the value text (target ~63% of icon height) ---
-        val targetValueH = sz * 0.63f
+        // --- Step 1: Size the value text (target ~55% of icon height) ---
+        val targetValueH = sz * 0.55f
         iconValuePaint.textSize = targetValueH
         iconValuePaint.getTextBounds(value, 0, value.length, valueBounds)
         // Fit width first
@@ -429,9 +430,10 @@ class SpeedTestService : Service() {
             iconValuePaint.textSize *= if (widthAfter > sz) sz / iconValuePaint.measureText(value) else scale
             iconValuePaint.getTextBounds(value, 0, value.length, valueBounds)
         }
+        vw = iconValuePaint.measureText(value)
 
-        // --- Step 2: Size the unit text (target ~30% of icon height) ---
-        val targetUnitH = sz * 0.30f
+        // --- Step 2: Size the unit text (target ~42% of icon height) ---
+        val targetUnitH = sz * 0.42f
         iconUnitPaint.textSize = targetUnitH
         iconUnitPaint.getTextBounds(unit, 0, unit.length, unitBounds)
         var uw = iconUnitPaint.measureText(unit)
@@ -446,6 +448,7 @@ class SpeedTestService : Service() {
             iconUnitPaint.textSize *= if (widthAfter > sz) sz / iconUnitPaint.measureText(unit) else scale
             iconUnitPaint.getTextBounds(unit, 0, unit.length, unitBounds)
         }
+        uw = iconUnitPaint.measureText(unit)
 
         // --- Step 3: Lay out both as a single centered block ---
         vh = valueBounds.height().toFloat()
@@ -460,7 +463,9 @@ class SpeedTestService : Service() {
         // Unit baseline: starts after value + gap
         val unitBaseline = blockTop + vh + gap - unitBounds.top.toFloat()
 
+        // Horizontally center both texts in the middle of the icon
         val cx = sz / 2f
+
         canvas.drawText(value, cx, valueBaseline, iconValuePaint)
         canvas.drawText(unit, cx, unitBaseline, iconUnitPaint)
         return IconCompat.createWithBitmap(bitmap)

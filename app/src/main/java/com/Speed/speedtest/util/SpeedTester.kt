@@ -11,23 +11,12 @@ object SpeedTester {
         val displayText: String
     )
 
-    data class DataUsage(
-        val downloadBytes: Long,
-        val uploadBytes: Long,
-        val totalBytes: Long,
-        val displayText: String
-    )
-
     private var lastRxBytes: Long = -1L
     private var lastSampleTimeMs: Long = -1L
     private val smoothingWindow = LongArray(3)
     private var smoothingIndex = 0
     private var smoothingCount = 0
     private var smoothingSum = 0L
-
-    // Session data-usage tracking
-    private var initialRxBytes: Long = -1L
-    private var initialTxBytes: Long = -1L
 
     fun resetSampler() {
         lastRxBytes = -1L
@@ -36,12 +25,11 @@ object SpeedTester {
         smoothingIndex = 0
         smoothingCount = 0
         smoothingSum = 0L
-        initialRxBytes = -1L
-        initialTxBytes = -1L
     }
 
     /**
      * Samples realtime network speed from device-level traffic counters.
+     * Uses TrafficStats.getTotalRxBytes() which reads the kernel's /proc/net/dev counters.
      * Returns null when counters are unsupported.
      */
     fun sampleRealtimeSpeed(): SpeedSnapshot? {
@@ -72,32 +60,6 @@ object SpeedTester {
         return SpeedSnapshot(
             downloadBytesPerSecond = smoothBytesPerSecond,
             displayText = formatAdaptiveSpeed(smoothBytesPerSecond)
-        )
-    }
-
-    /**
-     * Returns cumulative data usage (download + upload) since the service started.
-     * Returns null when counters are unsupported.
-     */
-    fun getSessionDataUsage(): DataUsage? {
-        val currentRx = TrafficStats.getTotalRxBytes()
-        val currentTx = TrafficStats.getTotalTxBytes()
-        if (currentRx == TrafficStats.UNSUPPORTED.toLong()) return null
-
-        if (initialRxBytes < 0L) {
-            initialRxBytes = currentRx
-            initialTxBytes = currentTx
-        }
-
-        val dlBytes = max(0L, currentRx - initialRxBytes)
-        val ulBytes = max(0L, currentTx - initialTxBytes)
-        val total = dlBytes + ulBytes
-
-        return DataUsage(
-            downloadBytes = dlBytes,
-            uploadBytes = ulBytes,
-            totalBytes = total,
-            displayText = "↓${formatDataSize(dlBytes)}  ↑${formatDataSize(ulBytes)}"
         )
     }
 

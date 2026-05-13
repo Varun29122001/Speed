@@ -73,12 +73,10 @@ class SpeedTestService : Service() {
     private var lastBitmap: android.graphics.Bitmap? = null
     private val iconValuePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG or Paint.LINEAR_TEXT_FLAG).apply {
         textAlign = Paint.Align.CENTER
-        typeface = Typeface.DEFAULT_BOLD
         hinting = Paint.HINTING_ON
     }
     private val iconUnitPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG or Paint.LINEAR_TEXT_FLAG).apply {
         textAlign = Paint.Align.CENTER
-        typeface = Typeface.DEFAULT_BOLD
         hinting = Paint.HINTING_ON
     }
     private val valueBounds = Rect()
@@ -394,8 +392,21 @@ class SpeedTestService : Service() {
         val canvas = Canvas(bitmap)
 
         val fgColor = getForegroundColor()
-        iconValuePaint.color = fgColor
-        iconUnitPaint.color = fgColor
+        
+        val sysTypeface = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            Typeface.create(Typeface.DEFAULT, 800, false)
+        } else {
+            Typeface.DEFAULT_BOLD
+        }
+        
+        iconValuePaint.apply {
+            color = fgColor
+            typeface = sysTypeface
+        }
+        iconUnitPaint.apply {
+            color = fgColor
+            typeface = sysTypeface
+        }
 
         val sz = iconSizePx.toFloat()
         val gap = sz * 0.03f  // tiny gap between value and unit

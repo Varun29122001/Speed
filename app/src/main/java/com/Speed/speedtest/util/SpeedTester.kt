@@ -2,85 +2,106 @@ package com.Speed.speedtest.util
 
 import android.net.TrafficStats
 import android.os.SystemClock
+import java.util.Locale
 import kotlin.math.max
 
-class SpeedTester {
-    companion object {
-        data class SpeedSnapshot(
-            val downloadKBps: Double,
-            val uploadKBps: Double,
-            val totalKBps: Double,
-            val downloadText: String,
-            val uploadText: String,
-            val totalText: String
-        )
+object SpeedTester {
+    data class SpeedSnapshot(
+        val downloadBytesPerSecond: Double,
+        val displayText: String
+    )
 
-        private var lastRxBytes: Long = -1L
-        private var lastTxBytes: Long = -1L
-        private var lastSampleTimeMs: Long = -1L
+    private var lastRxBytes: Long = -1L
+    private var lastSampleTimeMs: Long = -1L
+    private val smoothingWindow = LongArray(3)
+    private var smoothingIndex = 0
+    private var smoothingCount = 0
+    private var smoothingSum = 0L
 
-        fun resetSampler() {
-            lastRxBytes = -1L
-            lastTxBytes = -1L
-            lastSampleTimeMs = -1L
+    fun resetSampler() {
+        lastRxBytes = -1L
+        lastSampleTimeMs = -1L
+        smoothingWindow.fill(0L)
+        smoothingIndex = 0
+        smoothingCount = 0
+        smoothingSum = 0L
+    }
+
+    /**
+     * Samples realtime network speed from device-level traffic counters.
+     * Uses TrafficStats.getTotalRxBytes() which reads the kernel's /proc/net/dev counters.
+     * Returns null when counters are unsupported.
+     */
+    fun sampleRealtimeSpeed(): SpeedSnapshot? {
+        val currentRx = TrafficStats.getTotalRxBytes()
+        if (currentRx == TrafficStats.UNSUPPORTED.toLong()) {
+            return null
         }
 
-        /**
-         * Samples realtime network speed from device-level traffic counters.
-         * Returns null when counters are unsupported.
-         */
-        fun sampleRealtimeSpeed(): SpeedSnapshot? {
-            val currentRx = TrafficStats.getTotalRxBytes()
-            val currentTx = TrafficStats.getTotalTxBytes()
-            if (currentRx == TrafficStats.UNSUPPORTED.toLong() || currentTx == TrafficStats.UNSUPPORTED.toLong()) {
-                return null
-            }
-
-            val now = SystemClock.elapsedRealtime()
-            if (lastSampleTimeMs <= 0L) {
-                lastRxBytes = currentRx
-                lastTxBytes = currentTx
-                lastSampleTimeMs = now
-                return SpeedSnapshot(
-                    downloadKBps = 0.0,
-                    uploadKBps = 0.0,
-                    totalKBps = 0.0,
-                    downloadText = formatAdaptiveSpeed(0.0),
-                    uploadText = formatAdaptiveSpeed(0.0),
-                    totalText = formatAdaptiveSpeed(0.0)
-                )
-            }
-
-            val elapsedMs = max(1L, now - lastSampleTimeMs)
-            val rxDelta = max(0L, currentRx - lastRxBytes)
-            val txDelta = max(0L, currentTx - lastTxBytes)
-
+        val now = SystemClock.elapsedRealtime()
+        if (lastSampleTimeMs <= 0L) {
             lastRxBytes = currentRx
-            lastTxBytes = currentTx
             lastSampleTimeMs = now
-
-            val elapsedSeconds = elapsedMs / 1000.0
-            val downloadKBps = (rxDelta / 1024.0) / elapsedSeconds
-            val uploadKBps = (txDelta / 1024.0) / elapsedSeconds
-            val totalKBps = downloadKBps + uploadKBps
-
             return SpeedSnapshot(
-                downloadKBps = downloadKBps,
-                uploadKBps = uploadKBps,
-                totalKBps = totalKBps,
-                downloadText = formatAdaptiveSpeed(downloadKBps),
-                uploadText = formatAdaptiveSpeed(uploadKBps),
-                totalText = formatAdaptiveSpeed(totalKBps)
+                downloadBytesPerSecond = 0.0,
+                displayText = formatAdaptiveSpeed(0.0)
             )
         }
 
-        fun formatAdaptiveSpeed(speedKBps: Double): String {
-            return if (speedKBps >= 1024.0) {
-                "${"%.3f".format(speedKBps / 1024.0)} MB/s"
-            } else {
-                "${"%.2f".format(speedKBps)} KB/s"
-            }
+        val elapsedMs = max(1L, now - lastSampleTimeMs)
+        val rxDelta = max(0L, currentRx - lastRxBytes)
+
+        lastRxBytes = currentRx
+        lastSampleTimeMs = now
+
+        val bytesPerSecond = (rxDelta * 1000.0) / elapsedMs
+        val smoothBytesPerSecond = applyMovingAverage(bytesPerSecond.toLong()).toDouble()
+
+        return SpeedSnapshot(
+            downloadBytesPerSecond = smoothBytesPerSecond,
+            displayText = formatAdaptiveSpeed(smoothBytesPerSecond)
+        )
+    }
+
+    private fun applyMovingAverage(currentSampleBytesPerSecond: Long): Long {
+        if (smoothingCount < smoothingWindow.size) {
+            smoothingWindow[smoothingIndex] = currentSampleBytesPerSecond
+            smoothingSum += currentSampleBytesPerSecond
+            smoothingCount++
+        } else {
+            val previous = smoothingWindow[smoothingIndex]
+            smoothingWindow[smoothingIndex] = currentSampleBytesPerSecond
+            smoothingSum += currentSampleBytesPerSecond - previous
         }
 
+        smoothingIndex = (smoothingIndex + 1) % smoothingWindow.size
+        return if (smoothingCount == 0) 0L else smoothingSum / smoothingCount
+    }
+
+    fun formatAdaptiveSpeed(bytesPerSecond: Double): String {
+        return when {
+            bytesPerSecond <= 0.0 ->
+                "0 KB/s"
+            bytesPerSecond >= 1024.0 * 1024.0 ->
+                String.format(Locale.US, "%.2f MB/s", bytesPerSecond / (1024.0 * 1024.0))
+            bytesPerSecond >= 1024.0 ->
+                String.format(Locale.US, "%.0f KB/s", bytesPerSecond / 1024.0)
+            else ->
+                String.format(Locale.US, "%.0f B/s", bytesPerSecond)
+        }
+    }
+
+    fun formatDataSize(bytes: Long): String {
+        return when {
+            bytes >= 1024L * 1024L * 1024L ->
+                String.format(Locale.US, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
+            bytes >= 1024L * 1024L ->
+                String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+            bytes >= 1024L ->
+                String.format(Locale.US, "%.0f KB", bytes / 1024.0)
+            else ->
+                String.format(Locale.US, "%d B", bytes)
+        }
     }
 }
+

@@ -12,27 +12,22 @@ class BootReceiver : BroadcastReceiver() {
         private const val TAG = "BootReceiver"
     }
 
-    override fun onReceive(context: Context?, intent: Intent?) {
-        if (context == null || intent?.action == null) return
-
-        val action = intent.action
-        val isInstallBroadcastForThisApp =
-            action == Intent.ACTION_PACKAGE_ADDED && intent.data?.schemeSpecificPart == context.packageName
-
-        val shouldStart =
-            action == Intent.ACTION_BOOT_COMPLETED ||
-                action == Intent.ACTION_LOCKED_BOOT_COMPLETED ||
-                action == Intent.ACTION_MY_PACKAGE_REPLACED ||
-                isInstallBroadcastForThisApp
-
-        if (!shouldStart) return
+    override fun onReceive(context: Context, intent: Intent?) {
+        val action = intent?.action ?: return
+        if (
+            action != Intent.ACTION_BOOT_COMPLETED &&
+            action != Intent.ACTION_LOCKED_BOOT_COMPLETED &&
+            action != Intent.ACTION_MY_PACKAGE_REPLACED
+        ) {
+            return
+        }
 
         try {
-            Log.d(TAG, "Startup trigger received: $action")
             val serviceIntent = Intent(context, SpeedTestService::class.java)
             ContextCompat.startForegroundService(context, serviceIntent)
+            Log.i(TAG, "Requested SpeedTestService start for action=$action")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start SpeedTestService: ${e.message}", e)
+            Log.e(TAG, "Unable to start SpeedTestService on boot/update: ${e.message}", e)
         }
     }
 }

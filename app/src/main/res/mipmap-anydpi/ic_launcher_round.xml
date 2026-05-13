@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Use the vector background and bitmap foreground so the round adaptive icon displays correctly -->
     <background android:drawable="@drawable/ic_launcher_background" />
+    <!-- Foreground drawable now includes its own inset sizing -->
     <foreground android:drawable="@drawable/ic_launcher_foreground" />
-    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
 </adaptive-icon>

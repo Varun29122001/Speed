@@ -2,4 +2,5 @@
     <string name="app_name">Speed</string>
     <string name="notification_speed_default">0 KB/s</string>
     <string name="notification_action_channel_settings">Channel settings</string>
+    <string name="notification_permission_denied">Speed needs notification access to display the realtime speed.</string>
 </resources>

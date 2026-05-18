@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
+import android.widget.Toast
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.Speed.speedtest.service.SpeedTestService
@@ -43,7 +44,19 @@ class LauncherActivity : android.app.Activity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == NOTIFICATION_PERMISSION_CODE) {
             shouldFinishAfterPermission = false
-            startServiceAndFinish()
+            val granted = grantResults.isNotEmpty() &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED
+            if (granted) {
+                startServiceAndFinish()
+            } else {
+                Log.w(TAG, "POST_NOTIFICATIONS denied; not starting service")
+                Toast.makeText(
+                    this,
+                    R.string.notification_permission_denied,
+                    Toast.LENGTH_SHORT
+                ).show()
+                finish()
+            }
         }
     }
 

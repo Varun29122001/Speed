@@ -49,6 +49,7 @@ class SpeedTestService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "speed_test_channel_v5_top"
         private const val SAMPLE_INTERVAL_MS = 1_000L
+        private const val USAGE_REFRESH_INTERVAL_MS = 5_000L
         private const val INITIAL_SPEED_TEXT = "0 KB/s"
         private const val ICON_BASE_DP = 48f
         private const val ICON_MIN_PX = 96
@@ -59,9 +60,11 @@ class SpeedTestService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var samplingJob: Job? = null
+    private var usageRefreshJob: Job? = null
+    @Volatile private var cachedWifiText: String = ""
+    @Volatile private var cachedMobileText: String = ""
     private lateinit var notificationManager: NotificationManagerCompat
     private lateinit var notificationBuilder: NotificationCompat.Builder
-    private lateinit var compactView: RemoteViews
     private var lastIconLabel: String = ""
     private var lastNotificationText: String = ""
     private var lastWifiText: String = ""
@@ -71,6 +74,11 @@ class SpeedTestService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private lateinit var lastIcon: IconCompat
     private var lastBitmap: android.graphics.Bitmap? = null
+    // Sentinel guarantees the first tick re-renders even if uiMode happens to equal 0.
+    private var lastNightMode: Int = Int.MIN_VALUE
+    // Set when onCreate detects POST_NOTIFICATIONS is denied; suppresses sampling
+    // and onStartCommand work so a self-stop tears down without any further activity.
+    private var permissionGated: Boolean = false
     private val iconValuePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG or Paint.LINEAR_TEXT_FLAG).apply {
         textAlign = Paint.Align.CENTER
         hinting = Paint.HINTING_ON
@@ -92,6 +100,42 @@ class SpeedTestService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "SpeedTestService.onCreate() called - initializing service")
+
+        // Defensive gate: if POST_NOTIFICATIONS is denied (Android 13+), the foreground
+        // notification cannot be displayed and any caller that used startForegroundService()
+        // would see a ForegroundServiceDidNotStartInTimeException unless we still call
+        // startForeground() once before stopping. Post a minimal silent notification to
+        // satisfy the contract, then tear down without acquiring the wake lock or
+        // starting the sampling loop.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.w(TAG, "POST_NOTIFICATIONS denied; satisfying startForeground contract then self-stopping")
+            permissionGated = true
+            try {
+                notificationManager = NotificationManagerCompat.from(this)
+                createNotificationChannel()
+                val placeholder = NotificationCompat.Builder(this, CHANNEL_ID)
+                    .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                    .setContentTitle(getString(R.string.app_name))
+                    .setContentText(INITIAL_SPEED_TEXT)
+                    .setOngoing(false)
+                    .setSilent(true)
+                    .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+                    .build()
+                startForeground(
+                    NOTIFICATION_ID,
+                    placeholder,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Placeholder startForeground failed (likely non-foreground entry): ${e.message}")
+            }
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return
+        }
+
         acquireCpuWakeLock() // acquired once; released in onDestroy
         notificationManager = NotificationManagerCompat.from(this)
         createNotificationChannel()
@@ -101,6 +145,12 @@ class SpeedTestService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // If onCreate gated us off due to missing permission, do not run any sampling
+        // and do not request a sticky restart.
+        if (permissionGated) {
+            return START_NOT_STICKY
+        }
+
         if (intent?.action == ACTION_RESTORE_FROM_DISMISS) {
             // User/system dismissed notification: immediately restore foreground notification.
             startForegroundNotification()
@@ -109,6 +159,7 @@ class SpeedTestService : Service() {
         if (samplingJob?.isActive != true) {
             SpeedTester.resetSampler()
             startSamplingLoop()
+            startUsageRefreshLoop()
             Log.d(TAG, "Sampling started")
         }
         return START_STICKY
@@ -141,10 +192,14 @@ class SpeedTestService : Service() {
     }
 
     private fun startForegroundNotification() {
-        lastIconLabel = "0|KB/s"
+        // Seed the icon cache key with the current font-scale and night-mode so the
+        // first sample tick can short-circuit when value/unit haven't changed.
+        val fontScaleKey = (resources.configuration.fontScale * 100f).roundToInt()
+        val nightModeKey = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+        lastIconLabel = "0|KB/s|$fontScaleKey|$nightModeKey"
         lastNotificationText = INITIAL_SPEED_TEXT
+        lastNightMode = nightModeKey
         lastIcon = buildStatusIcon("0", "KB/s")
-        compactView = buildCompactRemoteViews()
         notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(lastIcon)
             .setStyle(NotificationCompat.DecoratedCustomViewStyle())
@@ -198,27 +253,59 @@ class SpeedTestService : Service() {
         }
     }
 
+    /**
+     * Refreshes today's Wi-Fi/Mobile usage on a slower cadence (every 5 s) so that
+     * NetworkStatsManager queries — which can take hundreds of ms on some OEM
+     * builds — never block the per-second speed sampling/notification update.
+     * Runs on its own coroutine; the speed loop reads the cached results.
+     */
+    private fun startUsageRefreshLoop() {
+        usageRefreshJob = serviceScope.launch {
+            while (isActive) {
+                try {
+                    val usage = DataUsageTracker.getTodayUsage(this@SpeedTestService)
+                    cachedWifiText = usage?.wifiDisplayText ?: ""
+                    cachedMobileText = usage?.mobileDisplayText ?: ""
+                } catch (ce: kotlinx.coroutines.CancellationException) {
+                    throw ce  // never swallow cancellation
+                } catch (e: Exception) {
+                    Log.d(TAG, "Usage refresh failed: ${e.message}")
+                }
+                delay(USAGE_REFRESH_INTERVAL_MS)
+            }
+        }
+    }
+
     private fun performSpeedSample() {
         try {
             val result = SpeedTester.sampleRealtimeSpeed()
             val speedText = if (result == null) "0 KB/s" else result.displayText
 
-            // Get today's Wi-Fi / Mobile data usage from system stats
-            val usage = DataUsageTracker.getTodayUsage(this)
-            updateNotification(
-                speedText,
-                usage?.wifiDisplayText ?: "",
-                usage?.mobileDisplayText ?: ""
-            )
+            // Read cached usage values populated by startUsageRefreshLoop.
+            updateNotification(speedText, cachedWifiText, cachedMobileText)
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce  // never swallow cancellation
         } catch (e: Exception) {
             Log.e(TAG, "Error during speed sampling: ${e.message}", e)
-            updateNotification("0 KB/s", "", "")
+            updateNotification("0 KB/s", cachedWifiText, cachedMobileText)
         }
     }
 
     private fun updateNotification(text: String, wifiText: String, mobileText: String) {
         try {
-            if (text == lastNotificationText && wifiText == lastWifiText && mobileText == lastMobileText) return
+            val currentNightMode = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+            val nightModeChanged = currentNightMode != lastNightMode
+            if (!nightModeChanged &&
+                text == lastNotificationText &&
+                wifiText == lastWifiText &&
+                mobileText == lastMobileText
+            ) return
+
+            // On a theme toggle, force the launcher shortcut path to refresh its icon
+            // even when speedText itself has not changed (its own short-circuit keys on text).
+            if (nightModeChanged) {
+                lastShortcutText = ""
+            }
 
             applyCollapsedViewOnly(text, wifiText, mobileText)
             val fullSpeedText = text.trim()
@@ -240,6 +327,7 @@ class SpeedTestService : Service() {
                 lastNotificationText = text
                 lastWifiText = wifiText
                 lastMobileText = mobileText
+                lastNightMode = currentNightMode
             } catch (e: SecurityException) {
                 Log.e(TAG, "SecurityException posting notification: ${e.message}", e)
             }
@@ -320,51 +408,38 @@ class SpeedTestService : Service() {
         return PendingIntent.getActivity(this, 1003, settingsIntent, flags)
     }
 
-    private fun buildCompactRemoteViews(): RemoteViews {
-        val view = RemoteViews(packageName, R.layout.notification_speed_compact)
+    private fun applyCollapsedViewOnly(text: String, wifiText: String, mobileText: String) {
         val fgColor = getForegroundColor()
-        // Speed text
-        view.setTextViewText(R.id.text_speed, INITIAL_SPEED_TEXT)
+        // Build a FRESH RemoteViews on every update. Reusing a long-lived RemoteViews
+        // and mutating it works on AOSP, but several OEM skins occasionally fall back
+        // to the standard notification template (showing raw "W:/M:" text) when the
+        // mutated action list is parceled. A fresh instance per notify() avoids that.
+        val view = RemoteViews(packageName, R.layout.notification_speed_compact)
+        view.setTextViewText(R.id.text_speed, text)
         view.setTextColor(R.id.text_speed, fgColor)
-        // WiFi usage
-        view.setTextViewText(R.id.text_wifi_usage, "")
+        view.setTextViewText(R.id.text_wifi_usage, wifiText)
         view.setTextColor(R.id.text_wifi_usage, fgColor)
-        // Mobile usage
-        view.setTextViewText(R.id.text_mobile_usage, "")
+        view.setTextViewText(R.id.text_mobile_usage, mobileText)
         view.setTextColor(R.id.text_mobile_usage, fgColor)
-        // Separator
         view.setTextColor(R.id.text_separator, fgColor)
-        // Icon tints
         view.setInt(R.id.icon_status, "setColorFilter", fgColor)
         view.setInt(R.id.icon_wifi, "setColorFilter", fgColor)
         view.setInt(R.id.icon_mobile, "setColorFilter", fgColor)
-        return view
-    }
+        // Hide the separator when both usage values are empty so the standard template
+        // fallback never displays a stray "|" with nothing around it.
+        if (wifiText.isEmpty() && mobileText.isEmpty()) {
+            view.setViewVisibility(R.id.text_separator, android.view.View.GONE)
+        }
 
-    private fun applyCollapsedViewOnly(text: String, wifiText: String, mobileText: String) {
-        val fgColor = getForegroundColor()
-        // Speed
-        compactView.setTextViewText(R.id.text_speed, text)
-        compactView.setTextColor(R.id.text_speed, fgColor)
-        // WiFi data usage
-        compactView.setTextViewText(R.id.text_wifi_usage, wifiText)
-        compactView.setTextColor(R.id.text_wifi_usage, fgColor)
-        // Mobile data usage
-        compactView.setTextViewText(R.id.text_mobile_usage, mobileText)
-        compactView.setTextColor(R.id.text_mobile_usage, fgColor)
-        // Separator & icon tints for dark mode
-        compactView.setTextColor(R.id.text_separator, fgColor)
-        compactView.setInt(R.id.icon_status, "setColorFilter", fgColor)
-        compactView.setInt(R.id.icon_wifi, "setColorFilter", fgColor)
-        compactView.setInt(R.id.icon_mobile, "setColorFilter", fgColor)
-        // System template fallback text
+        // System-template fallback text (used when the system can't render the
+        // custom view). Keep it readable.
         val fallback = buildString {
             append(text)
-            if (wifiText.isNotEmpty()) append("  W: $wifiText")
-            if (mobileText.isNotEmpty()) append("  M: $mobileText")
+            if (wifiText.isNotEmpty()) append("  Wi-Fi $wifiText")
+            if (mobileText.isNotEmpty()) append("  Mobile $mobileText")
         }
         notificationBuilder.setContentText(fallback)
-        notificationBuilder.setCustomContentView(compactView)
+        notificationBuilder.setCustomContentView(view)
         // Explicitly clear expanded and heads-up custom layouts so only contracted content is defined.
         notificationBuilder.setCustomBigContentView(null)
         notificationBuilder.setCustomHeadsUpContentView(null)
@@ -373,7 +448,8 @@ class SpeedTestService : Service() {
     private fun getOrCreateStatusIcon(speedText: String): IconCompat {
         val (value, unit) = toIconParts(speedText)
         val fontScaleKey = (resources.configuration.fontScale * 100f).roundToInt()
-        val iconKey = "$value|$unit|$fontScaleKey"
+        val nightModeKey = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+        val iconKey = "$value|$unit|$fontScaleKey|$nightModeKey"
         if (iconKey == lastIconLabel) {
             return lastIcon
         }
@@ -384,7 +460,11 @@ class SpeedTestService : Service() {
     }
 
     private fun buildStatusIcon(value: String, unit: String): IconCompat {
-        lastBitmap?.recycle()
+        // Note: do NOT recycle lastBitmap here — it may still be referenced by the
+        // currently posted notification's IconCompat, the launcher dynamic shortcut's
+        // IconCompat, or an in-flight system render pass. Intermediate bitmaps are
+        // small (ARGB_8888 ~96×96, ~36 KB) and are reclaimed by the GC. The most
+        // recent bitmap is recycled exactly once in onDestroy().
         val iconSizePx = (ICON_BASE_DP * resources.displayMetrics.density).roundToInt().coerceAtLeast(ICON_MIN_PX)
         val bitmap = Bitmap.createBitmap(iconSizePx, iconSizePx, Bitmap.Config.ARGB_8888)
         // Tell Android this bitmap is already at screen density — prevents rescaling blur
@@ -491,6 +571,7 @@ class SpeedTestService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         samplingJob?.cancel()
+        usageRefreshJob?.cancel()
         serviceScope.cancel()
         releaseCpuWakeLock()
         lastBitmap?.recycle()

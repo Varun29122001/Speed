@@ -4,6 +4,7 @@ import android.net.TrafficStats
 import android.os.SystemClock
 import java.util.Locale
 import kotlin.math.max
+import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
 object SpeedTester {
@@ -56,7 +57,7 @@ object SpeedTester {
         lastSampleTimeMs = now
 
         val bytesPerSecond = (rxDelta * 1000.0) / elapsedMs
-        val smoothBytesPerSecond = applyMovingAverage(bytesPerSecond.toLong()).toDouble()
+        val smoothBytesPerSecond = applyMovingAverage(bytesPerSecond.roundToLong()).toDouble()
 
         return SpeedSnapshot(
             downloadBytesPerSecond = smoothBytesPerSecond,
@@ -89,14 +90,13 @@ object SpeedTester {
         // KB/s tier — bump up to MB if rounding would produce the misleading "1024 KB/s".
         val kb = bytesPerSecond / 1024.0
         if (kb >= 1.0) {
-            val rounded = kb.toInt() + if (kb - kb.toInt() >= 0.5) 1 else 0
+            val rounded = kb.roundToInt()
             return if (rounded >= 1024) String.format(Locale.US, "%.2f MB/s", mb)
             else String.format(Locale.US, "%d KB/s", rounded)
         }
 
         // B/s tier — same: bump up to "1 KB/s" instead of "1024 B/s".
-        val rounded = bytesPerSecond.toInt() +
-            if (bytesPerSecond - bytesPerSecond.toInt() >= 0.5) 1 else 0
+        val rounded = bytesPerSecond.roundToInt()
         return if (rounded >= 1024) "1 KB/s"
         else String.format(Locale.US, "%d B/s", rounded)
     }

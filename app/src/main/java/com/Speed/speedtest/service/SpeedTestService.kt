@@ -1,11 +1,13 @@
 package com.Speed.speedtest.service
 
-import android.annotation.SuppressLint
 import android.Manifest
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.content.res.Configuration
@@ -20,6 +22,7 @@ import android.app.NotificationChannel
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.widget.RemoteViews
@@ -56,6 +59,7 @@ class SpeedTestService : Service() {
         private const val ACTION_RESTORE_FROM_DISMISS = "com.Speed.speedtest.action.RESTORE_FROM_DISMISS"
         private const val DYNAMIC_SHORTCUT_ID = "speed_dynamic"
         private const val LEGACY_SHORTCUT_ID = "speed_shortcut"
+        private const val SHORTCUT_UPDATE_THROTTLE_MS = 5_000L
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -70,8 +74,9 @@ class SpeedTestService : Service() {
     private var lastWifiText: String = ""
     private var lastMobileText: String = ""
     private var lastShortcutText: String = ""
+    private var lastShortcutUpdateMs: Long = 0L
     private var shortcutRegistered: Boolean = false
-    private var wakeLock: PowerManager.WakeLock? = null
+    private var screenStateReceiver: BroadcastReceiver? = null
     private lateinit var lastIcon: IconCompat
     private var lastBitmap: android.graphics.Bitmap? = null
     // Sentinel guarantees the first tick re-renders even if uiMode happens to equal 0.
@@ -136,11 +141,11 @@ class SpeedTestService : Service() {
             return
         }
 
-        acquireCpuWakeLock() // acquired once; released in onDestroy
         notificationManager = NotificationManagerCompat.from(this)
         createNotificationChannel()
         startForegroundNotification()
         ensureDynamicShortcutRegistered()
+        registerScreenStateReceiver()
         Log.d(TAG, "Speed service created and foreground notification started")
     }
 
@@ -157,11 +162,19 @@ class SpeedTestService : Service() {
         }
 
         if (samplingJob?.isActive != true) {
-            SpeedTester.resetSampler()
-            startSamplingLoop()
-            startUsageRefreshLoop()
-            Log.d(TAG, "Sampling started")
+            val pm = getSystemService(PowerManager::class.java)
+            if (pm?.isInteractive != false) {
+                SpeedTester.resetSampler()
+                startSamplingLoop()
+            }
         }
+        if (usageRefreshJob?.isActive != true) {
+            val pm = getSystemService(PowerManager::class.java)
+            if (pm?.isInteractive != false) {
+                startUsageRefreshLoop()
+            }
+        }
+        Log.d(TAG, "Sampling started")
         return START_STICKY
     }
 
@@ -364,6 +377,9 @@ class SpeedTestService : Service() {
     private fun updateLauncherShortcutIcon(speedText: String, icon: IconCompat) {
         try {
             if (speedText == lastShortcutText) return
+            // Throttle: shortcut menu is rarely opened, 5s gap saves IPC
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastShortcutUpdateMs < SHORTCUT_UPDATE_THROTTLE_MS) return
             if (!ensureDynamicShortcutRegistered()) return
 
             val launchIntent = Intent(this, LauncherActivity::class.java).apply {
@@ -385,6 +401,7 @@ class SpeedTestService : Service() {
 
             ShortcutManagerCompat.updateShortcuts(this, listOf(liveShortcut, legacyShortcut))
             lastShortcutText = speedText
+            lastShortcutUpdateMs = now
         } catch (e: Exception) {
             Log.d(TAG, "Could not update launcher shortcut: ${e.message}")
         }
@@ -497,7 +514,7 @@ class SpeedTestService : Service() {
         iconValuePaint.textSize = targetValueH
         iconValuePaint.getTextBounds(value, 0, value.length, valueBounds)
         // Fit width first
-        var vw = iconValuePaint.measureText(value)
+        val vw = iconValuePaint.measureText(value)
         if (vw > sz) {
             iconValuePaint.textSize *= sz / vw
             iconValuePaint.getTextBounds(value, 0, value.length, valueBounds)
@@ -510,13 +527,12 @@ class SpeedTestService : Service() {
             iconValuePaint.textSize *= if (widthAfter > sz) sz / iconValuePaint.measureText(value) else scale
             iconValuePaint.getTextBounds(value, 0, value.length, valueBounds)
         }
-        vw = iconValuePaint.measureText(value)
 
         // --- Step 2: Size the unit text (target ~42% of icon height) ---
         val targetUnitH = sz * 0.42f
         iconUnitPaint.textSize = targetUnitH
         iconUnitPaint.getTextBounds(unit, 0, unit.length, unitBounds)
-        var uw = iconUnitPaint.measureText(unit)
+        val uw = iconUnitPaint.measureText(unit)
         if (uw > sz) {
             iconUnitPaint.textSize *= sz / uw
             iconUnitPaint.getTextBounds(unit, 0, unit.length, unitBounds)
@@ -528,7 +544,6 @@ class SpeedTestService : Service() {
             iconUnitPaint.textSize *= if (widthAfter > sz) sz / iconUnitPaint.measureText(unit) else scale
             iconUnitPaint.getTextBounds(unit, 0, unit.length, unitBounds)
         }
-        uw = iconUnitPaint.measureText(unit)
 
         // --- Step 3: Lay out both as a single centered block ---
         vh = valueBounds.height().toFloat()
@@ -551,8 +566,6 @@ class SpeedTestService : Service() {
         return IconCompat.createWithBitmap(bitmap)
     }
 
-
-
     private fun toIconParts(speedText: String): Pair<String, String> {
         val parts = speedText.trim().split(" ")
         if (parts.size < 2) return "0" to "KB/s"
@@ -573,7 +586,7 @@ class SpeedTestService : Service() {
         samplingJob?.cancel()
         usageRefreshJob?.cancel()
         serviceScope.cancel()
-        releaseCpuWakeLock()
+        unregisterScreenStateReceiver()
         lastBitmap?.recycle()
         lastBitmap = null
         Log.d(TAG, "Speed service destroyed")
@@ -584,32 +597,38 @@ class SpeedTestService : Service() {
         Log.d(TAG, "Task removed; service will continue as foreground due to stopWithTask=false")
     }
 
-    @SuppressLint("WakelockTimeout")
-    private fun acquireCpuWakeLock() {
-        if (wakeLock?.isHeld == true) return
-        try {
-            val powerManager = getSystemService(PowerManager::class.java)
-            val lock = powerManager?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:SpeedCpuLock")
-            lock?.setReferenceCounted(false)
-            lock?.acquire() // no timeout — lifecycle managed in onDestroy
-            wakeLock = lock
-            Log.i(TAG, "CPU wake lock acquired")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to acquire wake lock: ${e.message}", e)
+    private fun registerScreenStateReceiver() {
+        if (screenStateReceiver != null) return
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_ON -> {
+                        SpeedTester.resetSampler()
+                        if (samplingJob?.isActive != true) startSamplingLoop()
+                        if (usageRefreshJob?.isActive != true) startUsageRefreshLoop()
+                    }
+                    Intent.ACTION_SCREEN_OFF -> {
+                        samplingJob?.cancel()
+                        samplingJob = null
+                        usageRefreshJob?.cancel()
+                        usageRefreshJob = null
+                    }
+                }
+            }
         }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+        }
+        registerReceiver(receiver, filter)
+        screenStateReceiver = receiver
     }
 
-    private fun releaseCpuWakeLock() {
-        try {
-            if (wakeLock?.isHeld == true) {
-                wakeLock?.release()
-                Log.i(TAG, "CPU wake lock released")
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to release wake lock cleanly: ${e.message}")
-        } finally {
-            wakeLock = null
+    private fun unregisterScreenStateReceiver() {
+        screenStateReceiver?.let {
+            try { unregisterReceiver(it) } catch (_: Exception) {}
         }
+        screenStateReceiver = null
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

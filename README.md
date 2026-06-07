@@ -11,6 +11,7 @@ A lightweight, always-on Android app that displays your current download speed d
 - **Auto-start on boot** — no need to manually open the app after restarting
 - **Survives task removal** — continues running even if swiped away from recents
 - **Zero UI** — the app has no visible activity; it launches, starts the service, and exits
+- **Battery smart** — stops all work when screen is off, resumes instantly on unlock
 
 ---
 
@@ -25,13 +26,17 @@ A lightweight, always-on Android app that displays your current download speed d
 ┌─────────────────────┐
 │  SpeedTestService    │  ← Foreground service (runs indefinitely)
 │  ┌───────────────┐   │
-│  │ Sampling Loop  │   │  ← Coroutine: every 1 second
+│  │ Sampling Loop  │   │  ← Coroutine: every 1 second (screen-on only)
 │  │  SpeedTester   │──▶│  ← Reads TrafficStats Rx byte counters
 │  │  DataUsageTracker──▶│  ← Queries NetworkStatsManager for today's usage
 │  └───────────────┘   │
 │  ┌───────────────┐   │
 │  │ Notification   │   │  ← Updates status bar icon + custom content view
 │  │ Icon Renderer  │   │  ← Bitmap-based dynamic icon with speed value/unit
+│  └───────────────┘   │
+│  ┌───────────────┐   │
+│  │ Screen State   │   │  ← BroadcastReceiver: SCREEN_ON/OFF
+│  │ Receiver       │   │  ← Cancels jobs on screen-off, restarts on screen-on
 │  └───────────────┘   │
 └─────────────────────┘
            ▲
@@ -46,7 +51,7 @@ A lightweight, always-on Android app that displays your current download speed d
 
 ### 1. Real-Time Speed Measurement
 
-The app reads the device's total received bytes from the kernel's `/proc/net/dev` counters via `TrafficStats.getTotalRxBytes()`. Every 1 second:
+The app reads the device's total received bytes from the kernel's `/proc/net/dev` counters via `TrafficStats.getTotalRxBytes()`. Every 1 second (while screen is on):
 
 1. Reads current cumulative Rx bytes
 2. Computes delta from last sample: `rxDelta = currentRx - lastRx`
@@ -66,18 +71,20 @@ The speed value is rendered as a **dynamic bitmap icon** directly in the status 
 
 ```
 ┌─────────┐
-│   76    │  ← Speed value (63% of icon height, bold)
-│  KB/s   │  ← Unit label (30% of icon height, bold)
+│   76    │  ← Speed value (55% of icon height, bold)
+│  KB/s   │  ← Unit label (42% of icon height, bold)
 └─────────┘
 ```
 
 Technical details:
 - Canvas size: 48dp (min 96px) with `ARGB_8888` config
 - Bitmap density set to match screen density — prevents Android rescaling blur
-- `Typeface.DEFAULT_BOLD` with `ANTI_ALIAS_FLAG`, `SUBPIXEL_TEXT_FLAG`, `LINEAR_TEXT_FLAG`, and `HINTING_ON` for maximum sharpness
+- Font weight 800 on API 28+, `Typeface.DEFAULT_BOLD` fallback
+- `ANTI_ALIAS_FLAG`, `SUBPIXEL_TEXT_FLAG`, `LINEAR_TEXT_FLAG`, and `HINTING_ON` for maximum sharpness
 - Text sized using `getTextBounds()` for pixel-perfect glyph-aware positioning
 - Both value and unit are laid out as a single centered block with zero wasted space
 - Adapts to light/dark theme automatically
+- Icon cache keyed on `value|unit|fontScale|nightMode` — avoids redundant renders
 
 ### 3. Today's Data Usage
 
@@ -92,6 +99,7 @@ Displays today's total Wi-Fi and Mobile data consumption in the notification bod
 - Sums both `rxBytes` (download) and `txBytes` (upload) for total usage
 - Requires **Usage Access** permission (prompted on first launch)
 - Gracefully falls back to empty if permission not granted
+- Refreshed every 5 seconds on its own coroutine (never blocks speed sampling)
 
 ### 4. Persistent Foreground Notification
 
@@ -102,10 +110,11 @@ Displays today's total Wi-Fi and Mobile data consumption in the notification bod
 - **Silent** — no sound, no vibration, no LED
 - **Visible on lock screen** (`VISIBILITY_PUBLIC`)
 - Tapping the notification opens the notification channel settings
+- Only updates when values actually change (skips redundant IPC)
 
 ### 5. Dynamic Launcher Shortcut
 
-The app updates a dynamic shortcut with the current speed text and icon, so the speed is visible in the launcher's shortcut menu.
+The app updates a dynamic shortcut with the current speed text and icon, so the speed is visible in the launcher's shortcut menu. Throttled to every 5 seconds to minimize IPC overhead.
 
 ### 6. Boot Persistence
 
@@ -116,9 +125,14 @@ The app updates a dynamic shortcut with the current speed text and icon, so the 
 
 All three trigger the foreground service to start automatically.
 
-### 7. Wake Lock
+### 7. Battery Optimization — Screen-State Awareness
 
-A `PARTIAL_WAKE_LOCK` keeps the CPU active for consistent 1-second sampling even when the screen is off. Acquired in `onCreate()`, released in `onDestroy()`.
+Instead of holding a wake lock and sampling 24/7, the service registers a `BroadcastReceiver` for `SCREEN_ON` / `SCREEN_OFF`:
+
+- **Screen OFF**: Both coroutine jobs (speed sampling + usage refresh) are fully cancelled. Zero CPU wakeups, zero battery drain.
+- **Screen ON**: Sampler resets for a fresh delta, both jobs restart immediately. Speed is displayed within 1 second of unlock.
+
+The foreground service stays alive (notification persists) so no re-launch is needed. The CPU is free to enter deep sleep (Doze) when the screen is off.
 
 ---
 
@@ -164,18 +178,19 @@ Minimal bootstrap activity with `Theme.Translucent.NoTitleBar` and `excludeFromR
 ### `SpeedTestService.kt`
 The heart of the app — a foreground service that:
 - Creates a high-priority notification channel (silent, no badge)
-- Runs a coroutine sampling loop every 1 second
-- On each tick: samples speed via `SpeedTester`, queries usage via `DataUsageTracker`
+- Registers a screen-state receiver to pause/resume sampling
+- Runs a coroutine sampling loop every 1 second (screen-on only)
+- On each tick: samples speed via `SpeedTester`, reads cached usage from `DataUsageTracker`
 - Updates the notification only when values actually change (efficiency)
 - Renders a dynamic bitmap status bar icon with the current speed
-- Manages a dynamic launcher shortcut with live speed
+- Manages a dynamic launcher shortcut with live speed (throttled to 5s)
 - Handles `START_STICKY` for OS restart resilience
-- Holds a `PARTIAL_WAKE_LOCK` for background sampling consistency
+- Guards `onStartCommand` with `PowerManager.isInteractive` check
 
 ### `SpeedTester.kt`
 Pure utility object (no Android context needed):
-- `sampleRealtimeSpeed()` — reads `TrafficStats.getTotalRxBytes()`, computes delta/time, applies 3-sample moving average, returns `SpeedSnapshot` with bytes/sec and formatted display text
-- `formatAdaptiveSpeed()` — converts bytes/sec to human-readable string with adaptive units
+- `sampleRealtimeSpeed()` — reads `TrafficStats.getTotalRxBytes()`, computes delta/time, applies 3-sample moving average with proper rounding, returns `SpeedSnapshot` with bytes/sec and formatted display text
+- `formatAdaptiveSpeed()` — converts bytes/sec to human-readable string with adaptive units using `roundToInt()`
 - `formatDataSize()` — converts byte count to human-readable size (B, KB, MB, GB)
 - `resetSampler()` — clears all state for fresh start
 
@@ -186,7 +201,7 @@ Queries Android's `NetworkStatsManager` for real device-level statistics:
 - Returns `null` gracefully if permission not granted or stats unavailable
 
 ### `BootReceiver.kt`
-Simple `BroadcastReceiver` that starts `SpeedTestService` on boot, locked boot, or app update.
+Simple `BroadcastReceiver` that starts `SpeedTestService` on boot, locked boot, or app update. Skips start if `POST_NOTIFICATIONS` permission is denied.
 
 ---
 
@@ -197,7 +212,6 @@ Simple `BroadcastReceiver` that starts `SpeedTestService` on boot, locked boot, 
 | `FOREGROUND_SERVICE` | Run the speed monitoring service in the foreground |
 | `FOREGROUND_SERVICE_DATA_SYNC` | Required foreground service type declaration (Android 14+) |
 | `POST_NOTIFICATIONS` | Display the speed notification (runtime permission on Android 13+) |
-| `WAKE_LOCK` | Keep CPU active for consistent background sampling |
 | `RECEIVE_BOOT_COMPLETED` | Auto-start service on device boot |
 | `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` | Prompt user to exempt app from Doze |
 | `PACKAGE_USAGE_STATS` | Query NetworkStatsManager for today's data usage |
@@ -233,12 +247,15 @@ adb logcat -s SpeedTestService DataUsageTracker LauncherActivity BootReceiver
 | Min SDK | 31 (Android 12) |
 | Target SDK | 36 |
 | Language | Kotlin |
-| Build System | Gradle (Kotlin DSL) |
-| Dependencies | `androidx.core.ktx`, `androidx.lifecycle.runtime.ktx` |
+| Build System | Gradle (Kotlin DSL), AGP 9.2.1 |
+| Dependencies | `androidx.core.ktx:1.10.1`, `androidx.lifecycle.runtime.ktx:2.6.1` |
 | Notification Channel | `speed_test_channel_v5_top` (IMPORTANCE_HIGH) |
-| Sampling Interval | 1000ms |
+| Sampling Interval | 1000ms (screen-on only) |
+| Usage Refresh Interval | 5000ms (screen-on only) |
+| Shortcut Throttle | 5000ms |
 | Smoothing Window | 3 samples (moving average) |
 | Icon Bitmap Size | 48dp (min 96px), ARGB_8888 |
+| Battery Mode | Zero work when screen off; no wake lock |
 
 ---
 

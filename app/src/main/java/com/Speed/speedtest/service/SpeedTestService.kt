@@ -71,6 +71,7 @@ class SpeedTestService : Service() {
     private lateinit var notificationBuilder: NotificationCompat.Builder
     private var lastIconLabel: String = ""
     private var lastNotificationText: String = ""
+    private var lastUploadText: String = ""
     private var lastWifiText: String = ""
     private var lastMobileText: String = ""
     private var lastShortcutText: String = ""
@@ -236,7 +237,7 @@ class SpeedTestService : Service() {
             .setAutoCancel(false)
             .setSilent(true)
 
-        applyCollapsedViewOnly(INITIAL_SPEED_TEXT, "", "")
+        applyCollapsedViewOnly(INITIAL_SPEED_TEXT, INITIAL_SPEED_TEXT, "", "")
 
         try {
             // Check permission before starting foreground
@@ -292,24 +293,26 @@ class SpeedTestService : Service() {
     private fun performSpeedSample() {
         try {
             val result = SpeedTester.sampleRealtimeSpeed()
-            val speedText = if (result == null) "0 KB/s" else result.displayText
+            val downloadText = if (result == null) "0 KB/s" else result.downloadDisplayText
+            val uploadText = if (result == null) "0 KB/s" else result.uploadDisplayText
 
             // Read cached usage values populated by startUsageRefreshLoop.
-            updateNotification(speedText, cachedWifiText, cachedMobileText)
+            updateNotification(downloadText, uploadText, cachedWifiText, cachedMobileText)
         } catch (ce: kotlinx.coroutines.CancellationException) {
             throw ce  // never swallow cancellation
         } catch (e: Exception) {
             Log.e(TAG, "Error during speed sampling: ${e.message}", e)
-            updateNotification("0 KB/s", cachedWifiText, cachedMobileText)
+            updateNotification("0 KB/s", "0 KB/s", cachedWifiText, cachedMobileText)
         }
     }
 
-    private fun updateNotification(text: String, wifiText: String, mobileText: String) {
+    private fun updateNotification(downloadText: String, uploadText: String, wifiText: String, mobileText: String) {
         try {
             val currentNightMode = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
             val nightModeChanged = currentNightMode != lastNightMode
             if (!nightModeChanged &&
-                text == lastNotificationText &&
+                downloadText == lastNotificationText &&
+                uploadText == lastUploadText &&
                 wifiText == lastWifiText &&
                 mobileText == lastMobileText
             ) return
@@ -320,8 +323,8 @@ class SpeedTestService : Service() {
                 lastShortcutText = ""
             }
 
-            applyCollapsedViewOnly(text, wifiText, mobileText)
-            val fullSpeedText = text.trim()
+            applyCollapsedViewOnly(downloadText, uploadText, wifiText, mobileText)
+            val fullSpeedText = downloadText.trim()
             val speedIcon = getOrCreateStatusIcon(fullSpeedText)
             notificationBuilder.setSmallIcon(speedIcon)
             updateLauncherShortcutIcon(fullSpeedText, speedIcon)
@@ -336,8 +339,9 @@ class SpeedTestService : Service() {
 
             try {
                 notificationManager.notify(NOTIFICATION_ID, notificationBuilder.build())
-                Log.d(TAG, "Notification updated: $text")
-                lastNotificationText = text
+                Log.d(TAG, "Notification updated: ↓$downloadText ↑$uploadText")
+                lastNotificationText = downloadText
+                lastUploadText = uploadText
                 lastWifiText = wifiText
                 lastMobileText = mobileText
                 lastNightMode = currentNightMode
@@ -425,33 +429,45 @@ class SpeedTestService : Service() {
         return PendingIntent.getActivity(this, 1003, settingsIntent, flags)
     }
 
-    private fun applyCollapsedViewOnly(text: String, wifiText: String, mobileText: String) {
+    private fun applyCollapsedViewOnly(downloadText: String, uploadText: String, wifiText: String, mobileText: String) {
         val fgColor = getForegroundColor()
         // Build a FRESH RemoteViews on every update. Reusing a long-lived RemoteViews
         // and mutating it works on AOSP, but several OEM skins occasionally fall back
         // to the standard notification template (showing raw "W:/M:" text) when the
         // mutated action list is parceled. A fresh instance per notify() avoids that.
         val view = RemoteViews(packageName, R.layout.notification_speed_compact)
-        view.setTextViewText(R.id.text_speed, text)
-        view.setTextColor(R.id.text_speed, fgColor)
+
+        // Download speed
+        view.setTextViewText(R.id.text_download_speed, downloadText)
+        view.setTextColor(R.id.text_download_speed, fgColor)
+        view.setInt(R.id.icon_download, "setColorFilter", fgColor)
+
+        // Upload speed
+        view.setTextViewText(R.id.text_upload_speed, uploadText)
+        view.setTextColor(R.id.text_upload_speed, fgColor)
+        view.setInt(R.id.icon_upload, "setColorFilter", fgColor)
+
+        // Data usage
         view.setTextViewText(R.id.text_wifi_usage, wifiText)
         view.setTextColor(R.id.text_wifi_usage, fgColor)
         view.setTextViewText(R.id.text_mobile_usage, mobileText)
         view.setTextColor(R.id.text_mobile_usage, fgColor)
         view.setTextColor(R.id.text_separator, fgColor)
-        view.setInt(R.id.icon_status, "setColorFilter", fgColor)
         view.setInt(R.id.icon_wifi, "setColorFilter", fgColor)
         view.setInt(R.id.icon_mobile, "setColorFilter", fgColor)
+
         // Hide the separator when both usage values are empty so the standard template
         // fallback never displays a stray "|" with nothing around it.
         if (wifiText.isEmpty() && mobileText.isEmpty()) {
             view.setViewVisibility(R.id.text_separator, android.view.View.GONE)
+            view.setViewVisibility(R.id.icon_wifi, android.view.View.GONE)
+            view.setViewVisibility(R.id.icon_mobile, android.view.View.GONE)
         }
 
         // System-template fallback text (used when the system can't render the
         // custom view). Keep it readable.
         val fallback = buildString {
-            append(text)
+            append("↓$downloadText ↑$uploadText")
             if (wifiText.isNotEmpty()) append("  Wi-Fi $wifiText")
             if (mobileText.isNotEmpty()) append("  Mobile $mobileText")
         }

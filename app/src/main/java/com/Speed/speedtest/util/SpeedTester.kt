@@ -10,76 +10,129 @@ import kotlin.math.roundToLong
 object SpeedTester {
     data class SpeedSnapshot(
         val downloadBytesPerSecond: Double,
+        val uploadBytesPerSecond: Double,
+        val downloadDisplayText: String,
+        val uploadDisplayText: String,
+        /** Legacy field — same as downloadDisplayText for backward compat */
         val displayText: String
     )
 
+    // Download (Rx) state
     private var lastRxBytes: Long = -1L
+    private val rxSmoothingWindow = LongArray(3)
+    private var rxSmoothingIndex = 0
+    private var rxSmoothingCount = 0
+    private var rxSmoothingSum = 0L
+
+    // Upload (Tx) state
+    private var lastTxBytes: Long = -1L
+    private val txSmoothingWindow = LongArray(3)
+    private var txSmoothingIndex = 0
+    private var txSmoothingCount = 0
+    private var txSmoothingSum = 0L
+
+    // Shared timing
     private var lastSampleTimeMs: Long = -1L
-    private val smoothingWindow = LongArray(3)
-    private var smoothingIndex = 0
-    private var smoothingCount = 0
-    private var smoothingSum = 0L
 
     @Synchronized
     fun resetSampler() {
         lastRxBytes = -1L
+        lastTxBytes = -1L
         lastSampleTimeMs = -1L
-        smoothingWindow.fill(0L)
-        smoothingIndex = 0
-        smoothingCount = 0
-        smoothingSum = 0L
+        rxSmoothingWindow.fill(0L)
+        rxSmoothingIndex = 0
+        rxSmoothingCount = 0
+        rxSmoothingSum = 0L
+        txSmoothingWindow.fill(0L)
+        txSmoothingIndex = 0
+        txSmoothingCount = 0
+        txSmoothingSum = 0L
     }
 
     /**
      * Samples realtime network speed from device-level traffic counters.
-     * Uses TrafficStats.getTotalRxBytes() which reads the kernel's /proc/net/dev counters.
+     * Uses TrafficStats.getTotalRxBytes() and getTotalTxBytes() which read
+     * the kernel's /proc/net/dev counters.
      * Returns null when counters are unsupported.
      */
     @Synchronized
     fun sampleRealtimeSpeed(): SpeedSnapshot? {
         val currentRx = TrafficStats.getTotalRxBytes()
-        if (currentRx == TrafficStats.UNSUPPORTED.toLong()) {
+        val currentTx = TrafficStats.getTotalTxBytes()
+        if (currentRx == TrafficStats.UNSUPPORTED.toLong() ||
+            currentTx == TrafficStats.UNSUPPORTED.toLong()
+        ) {
             return null
         }
 
         val now = SystemClock.elapsedRealtime()
         if (lastSampleTimeMs <= 0L) {
             lastRxBytes = currentRx
+            lastTxBytes = currentTx
             lastSampleTimeMs = now
             return SpeedSnapshot(
                 downloadBytesPerSecond = 0.0,
+                uploadBytesPerSecond = 0.0,
+                downloadDisplayText = formatAdaptiveSpeed(0.0),
+                uploadDisplayText = formatAdaptiveSpeed(0.0),
                 displayText = formatAdaptiveSpeed(0.0)
             )
         }
 
         val elapsedMs = max(1L, now - lastSampleTimeMs)
         val rxDelta = max(0L, currentRx - lastRxBytes)
+        val txDelta = max(0L, currentTx - lastTxBytes)
 
         lastRxBytes = currentRx
+        lastTxBytes = currentTx
         lastSampleTimeMs = now
 
-        val bytesPerSecond = (rxDelta * 1000.0) / elapsedMs
-        val smoothBytesPerSecond = applyMovingAverage(bytesPerSecond.roundToLong()).toDouble()
+        // Download speed
+        val rxBytesPerSecond = (rxDelta * 1000.0) / elapsedMs
+        val smoothRxBps = applyRxMovingAverage(rxBytesPerSecond.roundToLong()).toDouble()
+
+        // Upload speed
+        val txBytesPerSecond = (txDelta * 1000.0) / elapsedMs
+        val smoothTxBps = applyTxMovingAverage(txBytesPerSecond.roundToLong()).toDouble()
+
+        val dlText = formatAdaptiveSpeed(smoothRxBps)
+        val ulText = formatAdaptiveSpeed(smoothTxBps)
 
         return SpeedSnapshot(
-            downloadBytesPerSecond = smoothBytesPerSecond,
-            displayText = formatAdaptiveSpeed(smoothBytesPerSecond)
+            downloadBytesPerSecond = smoothRxBps,
+            uploadBytesPerSecond = smoothTxBps,
+            downloadDisplayText = dlText,
+            uploadDisplayText = ulText,
+            displayText = dlText
         )
     }
 
-    private fun applyMovingAverage(currentSampleBytesPerSecond: Long): Long {
-        if (smoothingCount < smoothingWindow.size) {
-            smoothingWindow[smoothingIndex] = currentSampleBytesPerSecond
-            smoothingSum += currentSampleBytesPerSecond
-            smoothingCount++
+    private fun applyRxMovingAverage(currentSampleBytesPerSecond: Long): Long {
+        if (rxSmoothingCount < rxSmoothingWindow.size) {
+            rxSmoothingWindow[rxSmoothingIndex] = currentSampleBytesPerSecond
+            rxSmoothingSum += currentSampleBytesPerSecond
+            rxSmoothingCount++
         } else {
-            val previous = smoothingWindow[smoothingIndex]
-            smoothingWindow[smoothingIndex] = currentSampleBytesPerSecond
-            smoothingSum += currentSampleBytesPerSecond - previous
+            val previous = rxSmoothingWindow[rxSmoothingIndex]
+            rxSmoothingWindow[rxSmoothingIndex] = currentSampleBytesPerSecond
+            rxSmoothingSum += currentSampleBytesPerSecond - previous
         }
+        rxSmoothingIndex = (rxSmoothingIndex + 1) % rxSmoothingWindow.size
+        return if (rxSmoothingCount == 0) 0L else rxSmoothingSum / rxSmoothingCount
+    }
 
-        smoothingIndex = (smoothingIndex + 1) % smoothingWindow.size
-        return if (smoothingCount == 0) 0L else smoothingSum / smoothingCount
+    private fun applyTxMovingAverage(currentSampleBytesPerSecond: Long): Long {
+        if (txSmoothingCount < txSmoothingWindow.size) {
+            txSmoothingWindow[txSmoothingIndex] = currentSampleBytesPerSecond
+            txSmoothingSum += currentSampleBytesPerSecond
+            txSmoothingCount++
+        } else {
+            val previous = txSmoothingWindow[txSmoothingIndex]
+            txSmoothingWindow[txSmoothingIndex] = currentSampleBytesPerSecond
+            txSmoothingSum += currentSampleBytesPerSecond - previous
+        }
+        txSmoothingIndex = (txSmoothingIndex + 1) % txSmoothingWindow.size
+        return if (txSmoothingCount == 0) 0L else txSmoothingSum / txSmoothingCount
     }
 
     fun formatAdaptiveSpeed(bytesPerSecond: Double): String {
@@ -130,4 +183,3 @@ object SpeedTester {
         return String.format(Locale.US, "%d B", bytes)
     }
 }
-

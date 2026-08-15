@@ -1,3 +1,13 @@
+/*
+ * Copyright (C) 2026 Speed App. All rights reserved.
+ *
+ * This source code is proprietary and confidential. Unauthorized copying,
+ * modification, distribution, or use of this software, via any medium, is
+ * strictly prohibited without express written permission from the copyright holder.
+ *
+ * Licensed under a proprietary license. See LICENSE file in the project root.
+ */
+
 package com.Speed.speedtest
 
 import android.Manifest

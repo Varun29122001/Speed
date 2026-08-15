@@ -1,3 +1,13 @@
+/*
+ * Copyright (C) 2026 Speed App. All rights reserved.
+ *
+ * This source code is proprietary and confidential. Unauthorized copying,
+ * modification, distribution, or use of this software, via any medium, is
+ * strictly prohibited without express written permission from the copyright holder.
+ *
+ * Licensed under a proprietary license. See LICENSE file in the project root.
+ */
+
 package com.Speed.speedtest.service
 
 import android.Manifest
@@ -33,6 +43,7 @@ import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import com.Speed.speedtest.LauncherActivity
 import com.Speed.speedtest.R
+import com.Speed.speedtest.security.IntegrityChecker
 import com.Speed.speedtest.util.SpeedTester
 import com.Speed.speedtest.util.DataUsageTracker
 import java.util.Locale
@@ -144,6 +155,14 @@ class SpeedTestService : Service() {
 
         notificationManager = NotificationManagerCompat.from(this)
         createNotificationChannel()
+
+        // --- Security: verify app integrity before proceeding ---
+        if (!IntegrityChecker.verifyIntegrity(this)) {
+            Log.e(TAG, "Integrity check FAILED — app may have been tampered with")
+            stopSelf()
+            return
+        }
+
         startForegroundNotification()
         ensureDynamicShortcutRegistered()
         registerScreenStateReceiver()

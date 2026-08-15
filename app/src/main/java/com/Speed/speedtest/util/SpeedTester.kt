@@ -20,6 +20,7 @@ object SpeedTester {
     private var smoothingCount = 0
     private var smoothingSum = 0L
 
+    @Synchronized
     fun resetSampler() {
         lastRxBytes = -1L
         lastSampleTimeMs = -1L
@@ -34,6 +35,7 @@ object SpeedTester {
      * Uses TrafficStats.getTotalRxBytes() which reads the kernel's /proc/net/dev counters.
      * Returns null when counters are unsupported.
      */
+    @Synchronized
     fun sampleRealtimeSpeed(): SpeedSnapshot? {
         val currentRx = TrafficStats.getTotalRxBytes()
         if (currentRx == TrafficStats.UNSUPPORTED.toLong()) {

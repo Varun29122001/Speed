@@ -16,7 +16,6 @@
         android:layout_width="20dp"
         android:layout_height="20dp"
         android:src="@android:drawable/stat_sys_download_done"
-        android:tint="#1A1C1E"
         android:contentDescription="@null" />
 
     <TextView
@@ -36,7 +35,6 @@
         android:layout_width="15dp"
         android:layout_height="15dp"
         android:src="@drawable/ic_wifi"
-        android:tint="#1A1C1E"
         android:contentDescription="@null" />
 
     <TextView
@@ -66,7 +64,6 @@
         android:layout_width="15dp"
         android:layout_height="15dp"
         android:src="@drawable/ic_mobile_data"
-        android:tint="#1A1C1E"
         android:contentDescription="@null" />
 
     <TextView

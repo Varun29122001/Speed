@@ -131,7 +131,7 @@ class SpeedTestService : Service() {
                 startForeground(
                     NOTIFICATION_ID,
                     placeholder,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Placeholder startForeground failed (likely non-foreground entry): ${e.message}")
@@ -249,7 +249,7 @@ class SpeedTestService : Service() {
             startForeground(
                 NOTIFICATION_ID,
                 notificationBuilder.build(),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             )
             Log.i(TAG, "Foreground notification started successfully")
         } catch (e: Exception) {
@@ -620,7 +620,7 @@ class SpeedTestService : Service() {
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_SCREEN_OFF)
         }
-        registerReceiver(receiver, filter)
+        registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
         screenStateReceiver = receiver
     }
 
